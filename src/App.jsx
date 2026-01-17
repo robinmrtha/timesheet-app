@@ -32,6 +32,10 @@ function getRoute() {
 /* ---------- APP ---------- */
 export default function App() {
   const [session, setSession] = useState(null);
+
+  // ✅ NEW: this profile is used for the header display name
+  const [profile, setProfile] = useState(null);
+
   const [booting, setBooting] = useState(true);
   const [route, setRoute] = useState(getRoute());
 
@@ -54,6 +58,35 @@ export default function App() {
     return () => sub.subscription.unsubscribe();
   }, []);
 
+  // ✅ NEW: load the logged-in user's name from profiles so header can show name instead of email
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadMyProfile() {
+      if (!session?.user?.id) {
+        setProfile(null);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("name,email,role")
+        .eq("id", session.user.id)
+        .single();
+
+      if (cancelled) return;
+
+      if (error || !data) setProfile(null);
+      else setProfile(data);
+    }
+
+    loadMyProfile();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.user?.id]);
+
   return (
     <div style={styles.appBg}>
       <GlobalStyles />
@@ -62,7 +95,11 @@ export default function App() {
           right={
             session ? (
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <span className="pill pill-slate">{session.user.email}</span>
+                {/* ✅ CHANGED: show profile name first, fallback to email */}
+                <span className="pill pill-slate">
+                  {(profile?.name && profile.name.trim()) || session.user.email}
+                </span>
+
                 <button className="btn btn-ghost" onClick={() => supabase.auth.signOut()}>
                   Log out
                 </button>
@@ -775,11 +812,23 @@ function Dashboard({ session }) {
             <div className="grid3" style={{ marginTop: 10 }}>
               <div className="field">
                 <label>From</label>
-                <input className="input" type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} disabled={allTime} />
+                <input
+                  className="input"
+                  type="date"
+                  value={fromDate}
+                  onChange={(e) => setFromDate(e.target.value)}
+                  disabled={allTime}
+                />
               </div>
               <div className="field">
                 <label>To</label>
-                <input className="input" type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} disabled={allTime} />
+                <input
+                  className="input"
+                  type="date"
+                  value={toDate}
+                  onChange={(e) => setToDate(e.target.value)}
+                  disabled={allTime}
+                />
               </div>
               <div className="field">
                 <label>Status</label>
@@ -793,9 +842,24 @@ function Dashboard({ session }) {
           </Card>
 
           <div className="gridCards">
-            <StatCard title="Unpaid" value={`${totals.unpaidHours.toFixed(2)} hrs`} sub={`${totals.unpaidCount} entries • ${money(totals.unpaidPay)}`} accent="red" />
-            <StatCard title="Paid" value={`${totals.paidHours.toFixed(2)} hrs`} sub={`${totals.paidCount} entries • ${money(totals.paidPay)}`} accent="green" />
-            <StatCard title="Total" value={`${totals.totalHours.toFixed(2)} hrs`} sub={`${totals.totalCount} entries • ${money(totals.totalPay)}`} accent="indigo" />
+            <StatCard
+              title="Unpaid"
+              value={`${totals.unpaidHours.toFixed(2)} hrs`}
+              sub={`${totals.unpaidCount} entries • ${money(totals.unpaidPay)}`}
+              accent="red"
+            />
+            <StatCard
+              title="Paid"
+              value={`${totals.paidHours.toFixed(2)} hrs`}
+              sub={`${totals.paidCount} entries • ${money(totals.paidPay)}`}
+              accent="green"
+            />
+            <StatCard
+              title="Total"
+              value={`${totals.totalHours.toFixed(2)} hrs`}
+              sub={`${totals.totalCount} entries • ${money(totals.totalPay)}`}
+              accent="indigo"
+            />
           </div>
 
           {isAdmin && (
@@ -910,22 +974,43 @@ function Dashboard({ session }) {
             <form onSubmit={addHours} style={{ display: "grid", gap: 12, marginTop: 12, maxWidth: 520 }}>
               <div className="field">
                 <label>Work date</label>
-                <input className="input" type="date" value={workDate} onChange={(e) => setWorkDate(e.target.value)} required />
+                <input
+                  className="input"
+                  type="date"
+                  value={workDate}
+                  onChange={(e) => setWorkDate(e.target.value)}
+                  required
+                />
               </div>
               <div className="field">
                 <label>Hours</label>
-                <input className="input" type="number" step="0.25" value={hours} onChange={(e) => setHours(e.target.value)} placeholder="e.g. 7.5" required />
+                <input
+                  className="input"
+                  type="number"
+                  step="0.25"
+                  value={hours}
+                  onChange={(e) => setHours(e.target.value)}
+                  placeholder="e.g. 7.5"
+                  required
+                />
               </div>
               <div className="field">
                 <label>Notes (optional)</label>
-                <input className="input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional notes" />
+                <input
+                  className="input"
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  placeholder="Optional notes"
+                />
               </div>
 
               <button className="btn btn-primary" disabled={addBusy}>
                 {addBusy ? "Submitting…" : "Submit hours"}
               </button>
 
-              {addMsg && <div className={cls("alert", addMsg.includes("✅") ? "alert-green" : "alert-red")}>{addMsg}</div>}
+              {addMsg && (
+                <div className={cls("alert", addMsg.includes("✅") ? "alert-green" : "alert-red")}>{addMsg}</div>
+              )}
             </form>
           </Card>
         </div>
@@ -977,7 +1062,12 @@ function Dashboard({ session }) {
 
                   <div className="field">
                     <label>Payment reference (optional)</label>
-                    <input className="input" value={payReference} onChange={(e) => setPayReference(e.target.value)} placeholder="Zelle / Check # / Venmo" />
+                    <input
+                      className="input"
+                      value={payReference}
+                      onChange={(e) => setPayReference(e.target.value)}
+                      placeholder="Zelle / Check # / Venmo"
+                    />
                   </div>
                 </div>
 
@@ -994,12 +1084,17 @@ function Dashboard({ session }) {
                   </button>
 
                   <span className="pill pill-slate">
-                    Unpaid: <strong>{payPreview.unpaidCount}</strong> entries • <strong>{payPreview.unpaidHours.toFixed(2)}</strong> hrs •{" "}
+                    Unpaid: <strong>{payPreview.unpaidCount}</strong> entries •{" "}
+                    <strong>{payPreview.unpaidHours.toFixed(2)}</strong> hrs •{" "}
                     <strong>{money(payPreview.unpaidPay)}</strong>
                   </span>
                 </div>
 
-                <button className="btn btn-primary" onClick={markAllUnpaidPaid} disabled={payBusy || !payUserId || payPreview.unpaidCount === 0}>
+                <button
+                  className="btn btn-primary"
+                  onClick={markAllUnpaidPaid}
+                  disabled={payBusy || !payUserId || payPreview.unpaidCount === 0}
+                >
                   Mark all unpaid as PAID
                 </button>
 
@@ -1055,11 +1150,23 @@ function Dashboard({ session }) {
                 <form onSubmit={addRate} className="grid3" style={{ alignItems: "end" }}>
                   <div className="field">
                     <label>Effective from</label>
-                    <input className="input" type="date" value={newRateEffectiveFrom} onChange={(e) => setNewRateEffectiveFrom(e.target.value)} />
+                    <input
+                      className="input"
+                      type="date"
+                      value={newRateEffectiveFrom}
+                      onChange={(e) => setNewRateEffectiveFrom(e.target.value)}
+                    />
                   </div>
                   <div className="field">
                     <label>Hourly rate</label>
-                    <input className="input" type="number" step="0.01" value={newRateValue} onChange={(e) => setNewRateValue(e.target.value)} placeholder="e.g. 25" />
+                    <input
+                      className="input"
+                      type="number"
+                      step="0.01"
+                      value={newRateValue}
+                      onChange={(e) => setNewRateValue(e.target.value)}
+                      placeholder="e.g. 25"
+                    />
                   </div>
                   <button className="btn btn-primary" type="submit" disabled={!rateUserId}>
                     Add rate
@@ -1077,7 +1184,11 @@ function Dashboard({ session }) {
                 <div className="h2">Rate history</div>
                 <div className="muted">Most recent first.</div>
               </div>
-              <button className="btn btn-secondary" onClick={() => rateUserId && loadRates(rateUserId)} disabled={!rateUserId || rateLoading}>
+              <button
+                className="btn btn-secondary"
+                onClick={() => rateUserId && loadRates(rateUserId)}
+                disabled={!rateUserId || rateLoading}
+              >
                 {rateLoading ? "Loading…" : "Refresh"}
               </button>
             </div>
@@ -1172,7 +1283,13 @@ function ChangePassword() {
     <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12 }}>
       <div className="field">
         <label>New password</label>
-        <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 8 characters" />
+        <input
+          className="input"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="At least 8 characters"
+        />
       </div>
       <div className="field">
         <label>Confirm new password</label>
