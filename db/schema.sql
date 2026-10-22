@@ -4,8 +4,8 @@
 -- Apply with a DIRECT (non-pooled) connection on an empty database:
 --   psql "$DATABASE_URL_UNPOOLED" -v ON_ERROR_STOP=1 -f db/schema.sql
 --
--- pgcrypto lets the Cloudflare Worker verify cost-10 bcrypt inside Postgres
--- (see DEPLOY-CLOUDFLARE.md). CREATE EXTENSION needs the direct connection.
+-- pgcrypto remains from the old password login. Sign-in does not use it.
+-- Cloudflare Access is the session (see DEPLOY-CLOUDFLARE.md).
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
@@ -33,10 +33,10 @@ CREATE TABLE IF NOT EXISTS users (
   CONSTRAINT users_password_hash_present CHECK (length(password_hash) > 0)
 );
 
-COMMENT ON TABLE users IS 'Replaces Supabase auth.users and public.profiles. Same UUIDs. password_hash is bcrypt.';
+COMMENT ON TABLE users IS 'Replaces Supabase auth.users and public.profiles. Same UUIDs. Sign-in is Cloudflare Access, matched on email.';
 COMMENT ON COLUMN users.hourly_rate IS 'Copied from profiles. Unused for pay; see employee_rates.';
-COMMENT ON COLUMN users.active IS 'Inactive users cannot sign in. Admins still see their history.';
-COMMENT ON COLUMN users.password_hash IS 'bcrypt hash, cost 10. Imported Supabase hashes use the $2a$ prefix. bcryptjs may store $2b$. Workers verify both with pgcrypto crypt().';
+COMMENT ON COLUMN users.active IS 'Inactive users are not admitted. Admins still see their history.';
+COMMENT ON COLUMN users.password_hash IS 'Retained from password login. Not read or checked. Do not drop.';
 
 CREATE TABLE IF NOT EXISTS time_entries (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

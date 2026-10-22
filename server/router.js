@@ -1,4 +1,3 @@
-import { clearSessionCookie } from "./auth.js";
 import { assertSameOrigin, json, resolveApiRequest } from "./http.js";
 import { markPaid } from "./routes/pay.js";
 import {
@@ -14,8 +13,8 @@ import {
   listEntries,
   patchEntry,
 } from "./routes/entries.js";
-import { changePassword, getMe, login, logout, patchMe, session } from "./routes/session.js";
-import { createUser, listUsers, patchUser, resetPassword } from "./routes/users.js";
+import { getMe, patchMe, session } from "./routes/session.js";
+import { createUser, listUsers, patchUser } from "./routes/users.js";
 
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
@@ -27,10 +26,7 @@ export async function handle(request) {
     if (method === "OPTIONS") return new Response(null, { status: 204 });
     if (MUTATING.has(method)) assertSameOrigin(request);
 
-    if (path === "/api/auth/login" && method === "POST") return await login(request);
-    if (path === "/api/auth/logout" && method === "POST") return await logout(request);
     if (path === "/api/auth/session" && method === "GET") return await session(request);
-    if (path === "/api/auth/password" && method === "POST") return await changePassword(request);
     if (path === "/api/me" && method === "GET") return await getMe(request);
     if (path === "/api/me" && method === "PATCH") return await patchMe(request);
     if (path === "/api/users" && method === "GET") return await listUsers(request);
@@ -44,10 +40,6 @@ export async function handle(request) {
 
     const userMatch = path.match(/^\/api\/users\/([^/]+)$/);
     if (userMatch && method === "PATCH") return await patchUser(request, decodeURIComponent(userMatch[1]));
-    const passwordMatch = path.match(/^\/api\/users\/([^/]+)\/password$/);
-    if (passwordMatch && method === "POST") {
-      return await resetPassword(request, decodeURIComponent(passwordMatch[1]));
-    }
     const entryMatch = path.match(/^\/api\/entries\/([^/]+)$/);
     if (entryMatch && method === "PATCH") return await patchEntry(request, decodeURIComponent(entryMatch[1]));
     if (entryMatch && method === "DELETE") return await deleteEntry(request, decodeURIComponent(entryMatch[1]));
@@ -67,9 +59,6 @@ export async function handle(request) {
       { error: status >= 500 ? "Something went wrong" : error.message || "Request failed" },
       status,
     );
-    if (error.clearCookie) {
-      response.headers.append("set-cookie", clearSessionCookie(request));
-    }
     return response;
   }
 }

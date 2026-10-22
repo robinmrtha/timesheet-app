@@ -295,6 +295,7 @@ input:disabled, select:disabled { opacity: 0.65; }
   padding: 24px 16px;
 }
 .login-card { width: min(440px, 100%); display: grid; gap: 14px; }
+.login-card h1 { font-size: clamp(1.45rem, 2.4vw, 1.9rem); }
 .footnote { font-size: 0.92rem; }
 .modal-back {
   position: fixed;

@@ -16,7 +16,7 @@
   },
   // Names only. Values are `wrangler secret put` (production) or .dev.vars (local).
   "secrets": {
-    "required": ["DATABASE_URL", "AUTH_SECRET"]
+    "required": ["DATABASE_URL", "ACCESS_AUD"]
   },
   "observability": {
     "enabled": true,

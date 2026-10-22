@@ -6,7 +6,7 @@ import { useSession } from "./hooks/useSession.js";
 import { AccountPage } from "./pages/AccountPage.jsx";
 import { AddHoursPage } from "./pages/AddHoursPage.jsx";
 import { DashboardPage } from "./pages/DashboardPage.jsx";
-import { LoginPage } from "./pages/LoginPage.jsx";
+import { AccessGate } from "./pages/AccessGate.jsx";
 import { PayPage } from "./pages/PayPage.jsx";
 import { RatesPage } from "./pages/RatesPage.jsx";
 import { TeamPage } from "./pages/TeamPage.jsx";
@@ -27,7 +27,7 @@ export default function App() {
   if (session.error && !session.user) {
     return <LoadingScreen error message={session.error} onRetry={() => window.location.reload()} />;
   }
-  if (!session.user) return <LoginPage onSignedIn={session.setUser} />;
+  if (!session.user) return <AccessGate reason={session.reason} email={session.email} />;
 
   return (
     <Workspace

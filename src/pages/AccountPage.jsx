@@ -4,11 +4,7 @@ import { api } from "../lib/api.js";
 
 export function AccountPage({ user, onUser }) {
   const [name, setName] = useState(user.name || "");
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
   const [profileMessage, setProfileMessage] = useState("");
-  const [passwordMessage, setPasswordMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -28,38 +24,12 @@ export function AccountPage({ user, onUser }) {
     }
   }
 
-  async function savePassword(event) {
-    event.preventDefault();
-    setError("");
-    setPasswordMessage("");
-    if (newPassword.length < 8) {
-      setError("New password must be at least 8 characters.");
-      return;
-    }
-    if (newPassword !== confirm) {
-      setError("New passwords do not match.");
-      return;
-    }
-    setBusy(true);
-    try {
-      await api("/api/auth/password", {
-        method: "POST",
-        body: { currentPassword, newPassword },
-      });
-      setCurrentPassword("");
-      setNewPassword("");
-      setConfirm("");
-      setPasswordMessage("Password updated.");
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
     <div className="stack narrow">
-      <PageHeader title="Account" lede="Update the name shown in the header, or change your password." />
+      <PageHeader
+        title="Account"
+        lede="Update the name shown in the header. Sign-in is Cloudflare Access, using the email below."
+      />
       <Alert>{error}</Alert>
       <section className="card stack">
         <h2>Profile</h2>
@@ -75,44 +45,6 @@ export function AccountPage({ user, onUser }) {
           </button>
           <Alert kind="success">{profileMessage}</Alert>
         </form>
-      </section>
-      <section className="card stack">
-        <h2>Password</h2>
-        <form className="stack" onSubmit={savePassword}>
-          <Field label="Current password">
-            <input
-              type="password"
-              autoComplete="current-password"
-              value={currentPassword}
-              onChange={(event) => setCurrentPassword(event.target.value)}
-              required
-            />
-          </Field>
-          <Field label="New password">
-            <input
-              type="password"
-              autoComplete="new-password"
-              minLength={8}
-              value={newPassword}
-              onChange={(event) => setNewPassword(event.target.value)}
-              required
-            />
-          </Field>
-          <Field label="Confirm new password">
-            <input
-              type="password"
-              autoComplete="new-password"
-              value={confirm}
-              onChange={(event) => setConfirm(event.target.value)}
-              required
-            />
-          </Field>
-          <button className="btn btn-primary" type="submit" disabled={busy}>
-            {busy ? "Updating…" : "Update password"}
-          </button>
-          <Alert kind="success">{passwordMessage}</Alert>
-        </form>
-        <p className="footnote">If you forget this password, an admin can set a new one from the team page.</p>
       </section>
     </div>
   );

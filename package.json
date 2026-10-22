@@ -8,7 +8,7 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "node scripts/test-password.mjs && node scripts/test-api.mjs",
+    "test": "node scripts/test-password.mjs && node scripts/test-access.mjs && node scripts/test-api.mjs",
     "cf:dev": "npm run build && wrangler dev",
     "cf:deploy": "npm run build && wrangler deploy",
     "migrate": "node scripts/migrate-from-supabase.mjs",
