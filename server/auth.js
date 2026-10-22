@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { query } from "./db.js";
 import { httpError, isSecureRequest } from "./http.js";
+import { isLocalDatabaseHost, onWorkers } from "./runtime.js";
 
 const COOKIE = "hb_session";
 const MAX_AGE_SEC = 60 * 60 * 24 * 14;
@@ -127,24 +128,116 @@ export function issueSession(userId) {
   return sign({ sub: userId, iat: now, exp: now + MAX_AGE_SEC }, authSecret());
 }
 
-let dummyHashPromise;
+// Precomputed cost-10 bcrypt of a fixed string. Unknown emails are checked
+// against this so we never call bcrypt.hash() inside a Worker (that alone is
+// over the free-plan CPU limit). Not a user password.
+const DUMMY_BCRYPT = "$2a$10$OE2RZm8pANoFpog7nhrqkuacgevw//3G7HE.4Qlsx0p.oyDOkx3ai";
 
-function dummyHash() {
-  if (!dummyHashPromise) dummyHashPromise = bcrypt.hash("timesheet-dummy-password", 10);
-  return dummyHashPromise;
+function passwordBackend() {
+  const forced = process.env.PASSWORD_BACKEND;
+  if (forced === "pgcrypto" || forced === "bcryptjs") return forced;
+  return onWorkers() ? "pgcrypto" : "bcryptjs";
+}
+
+function isBcryptHash(hash) {
+  return typeof hash === "string" && /^\$2[aby]\$\d{2}\$/.test(hash);
+}
+
+// pgcrypto crypt() verifies $2a$ and returns false for $2b$/$2y$ without error.
+// Those prefixes are the same algorithm for hashes produced by bcryptjs; only
+// the label differs. The stored hash is not rewritten.
+function pgcryptoBcryptHash(hash) {
+  if (!isBcryptHash(hash)) return null;
+  if (hash.startsWith("$2a$")) return hash;
+  return `$2a$${hash.slice(4)}`;
+}
+
+function cleanPasswordError(error) {
+  if (error.code === "42883") {
+    const wrapped = new Error(
+      "Enable the pgcrypto extension before Workers can verify passwords",
+    );
+    wrapped.status = 500;
+    wrapped.code = "42883";
+    return wrapped;
+  }
+  const wrapped = new Error("Password check failed");
+  wrapped.status = 500;
+  wrapped.code = error.code;
+  return wrapped;
+}
+
+async function matchWithPgcrypto(password, hash) {
+  const stored = pgcryptoBcryptHash(hash);
+  if (!stored) return false;
+  try {
+    const { rows } = await query(`SELECT crypt($1, $2) = $2 AS ok`, [password, stored]);
+    return rows[0]?.ok === true;
+  } catch (error) {
+    throw cleanPasswordError(error);
+  }
+}
+
+async function hashWithPgcrypto(password) {
+  try {
+    const { rows } = await query(`SELECT crypt($1, gen_salt('bf', 10)) AS hash`, [password]);
+    const hash = rows[0]?.hash;
+    if (!isBcryptHash(hash)) throw httpError(500, "Could not hash password");
+    return hash;
+  } catch (error) {
+    if (error.status) throw error;
+    throw cleanPasswordError(error);
+  }
+}
+
+function canUseLocalBcryptFallback(error) {
+  return error.code === "42883" && isLocalDatabaseHost(process.env.DATABASE_URL || "");
 }
 
 export async function passwordsMatch(password, hash) {
+  const backend = passwordBackend();
+  console.log(JSON.stringify({ message: "password check", backend }));
   try {
+    if (!isBcryptHash(hash)) return false;
+    if (backend === "pgcrypto") return await matchWithPgcrypto(password, hash);
     return await bcrypt.compare(password, hash);
   } catch (error) {
-    console.error("bcrypt compare failed", error);
+    if (canUseLocalBcryptFallback(error)) {
+      console.warn(
+        JSON.stringify({ message: "pgcrypto missing on local database; using bcryptjs" }),
+      );
+      try {
+        return await bcrypt.compare(password, hash);
+      } catch (compareError) {
+        console.error(
+          JSON.stringify({ message: "password compare failed", code: compareError.code || "unknown" }),
+        );
+        return false;
+      }
+    }
+    if (error.status) throw error;
+    console.error(
+      JSON.stringify({ message: "password compare failed", code: error.code || "unknown" }),
+    );
     return false;
   }
 }
 
 export async function hashPassword(password) {
-  return bcrypt.hash(password, 10);
+  const backend = passwordBackend();
+  console.log(JSON.stringify({ message: "password hash", backend }));
+  if (backend !== "pgcrypto") return bcrypt.hash(password, 10);
+  try {
+    return await hashWithPgcrypto(password);
+  } catch (error) {
+    if (canUseLocalBcryptFallback(error)) {
+      console.warn(
+        JSON.stringify({ message: "pgcrypto missing on local database; using bcryptjs" }),
+      );
+      return bcrypt.hash(password, 10);
+    }
+    throw error;
+  }
 }
 
 export async function assertIpAllowed(ip) {
@@ -207,5 +300,5 @@ export async function clearFailedLogins(userId) {
 }
 
 export async function compareUnknownPassword(password) {
-  await passwordsMatch(password, await dummyHash());
+  await passwordsMatch(password, DUMMY_BCRYPT);
 }

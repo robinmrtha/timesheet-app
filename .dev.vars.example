@@ -1,0 +1,4 @@
+# Local `wrangler dev` only. Copy to .dev.vars and fill in. Do not commit .dev.vars.
+# Production values are set with `npx wrangler secret put`, not in this file.
+DATABASE_URL="postgres://timesheet:timesheet@127.0.0.1:5432/timesheet"
+AUTH_SECRET="replace-with-at-least-32-random-characters"

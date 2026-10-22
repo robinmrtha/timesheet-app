@@ -23,7 +23,7 @@ export default defineConfig([
     },
   },
   {
-    files: ["server/**/*.js", "api/**/*.js", "scripts/**/*.js", "vite.config.js"],
+    files: ["server/**/*.js", "api/**/*.js", "worker/**/*.js", "scripts/**/*.js", "vite.config.js"],
     extends: [js.configs.recommended],
     languageOptions: {
       ecmaVersion: 2022,
