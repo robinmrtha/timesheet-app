@@ -4,10 +4,15 @@ import { EntryList } from "../components/EntryList.jsx";
 import { Alert, EmptyState, LoadingBlock, PageHeader, StatCard } from "../components/ui.jsx";
 import { api, withQuery } from "../lib/api.js";
 import { hoursText, money } from "../lib/format.js";
+import { allows } from "../../shared/permissions.js";
 import { summarize, summarizeByEmployee } from "../lib/totals.js";
 
-export function DashboardPage({ user, filters }) {
-  const isAdmin = user.role === "admin";
+export function DashboardPage({ user, permissions, filters }) {
+  const seeOthers =
+    allows(permissions, "timesheet.team", "view") || allows(permissions, "timesheet.payroll", "view");
+  const showMoney = allows(permissions, "timesheet.payroll", "view") || !seeOthers;
+  const editOwn = allows(permissions, "timesheet.own", "edit");
+  const editTeam = allows(permissions, "timesheet.team", "edit");
   const [status, setStatus] = useState("all");
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -40,16 +45,16 @@ export function DashboardPage({ user, filters }) {
 
   const totals = useMemo(() => summarize(entries), [entries]);
   const byEmployee = useMemo(
-    () => (isAdmin ? summarizeByEmployee(entries) : []),
-    [entries, isAdmin],
+    () => (seeOthers ? summarizeByEmployee(entries) : []),
+    [entries, seeOthers],
   );
   const firstLoad = loading && entries.length === 0 && !error;
 
   return (
     <div className="stack">
       <PageHeader
-        eyebrow={isAdmin ? "Admin" : "Your timesheet"}
-        title={isAdmin ? "Payroll overview" : `Hello, ${(user.name || user.email).split(" ")[0]}`}
+        eyebrow={seeOthers ? "Team" : "Your timesheet"}
+        title={seeOthers ? "Payroll overview" : `Hello, ${(user.name || user.email).split(" ")[0]}`}
         lede="Totals follow the dates and status you pick below. Amounts use the rate saved on each entry."
       >
         <button
@@ -71,26 +76,26 @@ export function DashboardPage({ user, filters }) {
           tone="unpaid"
           label="Unpaid"
           value={hoursText(totals.unpaidHours)}
-          money={money(totals.unpaidPay)}
+          money={showMoney ? money(totals.unpaidPay) : null}
           detail={`${totals.unpaidCount} ${totals.unpaidCount === 1 ? "entry" : "entries"}`}
         />
         <StatCard
           tone="paid"
           label="Paid"
           value={hoursText(totals.paidHours)}
-          money={money(totals.paidPay)}
+          money={showMoney ? money(totals.paidPay) : null}
           detail={`${totals.paidCount} ${totals.paidCount === 1 ? "entry" : "entries"}`}
         />
         <StatCard
           tone="total"
           label="Total"
           value={hoursText(totals.totalHours)}
-          money={money(totals.totalPay)}
+          money={showMoney ? money(totals.totalPay) : null}
           detail={`${totals.totalCount} ${totals.totalCount === 1 ? "entry" : "entries"}`}
         />
       </section>
 
-      {isAdmin ? (
+      {seeOthers ? (
         <section className="card">
           <div className="section-head">
             <h2>By employee</h2>
@@ -101,7 +106,7 @@ export function DashboardPage({ user, filters }) {
           ) : byEmployee.length === 0 ? (
             <EmptyState title="Nothing in this view">Try a wider date range, or show all statuses.</EmptyState>
           ) : (
-            <EmployeeRollup rows={byEmployee} />
+            <EmployeeRollup rows={byEmployee} showMoney={showMoney} />
           )}
         </section>
       ) : null}
@@ -116,19 +121,28 @@ export function DashboardPage({ user, filters }) {
           <LoadingBlock label="Loading entries…" />
         ) : !error && entries.length === 0 ? (
           <EmptyState title="No entries yet">
-            {isAdmin
+            {seeOthers
               ? "Nobody has hours in this date range."
               : "Submit hours from the Add hours tab. You can add more than one entry on the same day."}
           </EmptyState>
         ) : !error ? (
-          <EntryList entries={entries} isAdmin={isAdmin} onChanged={() => setReloadKey((value) => value + 1)} />
+          <EntryList
+            entries={entries}
+            userId={user.id}
+            showPeople={seeOthers}
+            showMoney={showMoney}
+            editOwn={editOwn}
+            editTeam={editTeam}
+            canDelete={editTeam}
+            onChanged={() => setReloadKey((value) => value + 1)}
+          />
         ) : null}
       </section>
     </div>
   );
 }
 
-function EmployeeRollup({ rows }) {
+function EmployeeRollup({ rows, showMoney }) {
   return (
     <>
       <div className="only-mobile entry-cards">
@@ -138,11 +152,17 @@ function EmployeeRollup({ rows }) {
               <strong>{row.name}</strong>
               {row.active ? null : <span className="badge badge-muted">Inactive</span>}
             </div>
-            <p className="entry-amount">{money(row.unpaidPay)}</p>
+            <p className="entry-amount">{showMoney ? money(row.unpaidPay) : hoursText(row.unpaidHours)}</p>
             <p className="entry-meta">Unpaid · {hoursText(row.unpaidHours)}</p>
-            <p className="quiet">
-              Paid {money(row.paidPay)} · Total {money(row.totalPay)} ({hoursText(row.totalHours)})
-            </p>
+            {showMoney ? (
+              <p className="quiet">
+                Paid {money(row.paidPay)} · Total {money(row.totalPay)} ({hoursText(row.totalHours)})
+              </p>
+            ) : (
+              <p className="quiet">
+                Paid {hoursText(row.paidHours)} · Total {hoursText(row.totalHours)}
+              </p>
+            )}
           </article>
         ))}
       </div>
@@ -152,11 +172,11 @@ function EmployeeRollup({ rows }) {
             <tr>
               <th>Employee</th>
               <th>Unpaid hrs</th>
-              <th>Unpaid</th>
+              {showMoney ? <th>Unpaid</th> : null}
               <th>Paid hrs</th>
-              <th>Paid</th>
+              {showMoney ? <th>Paid</th> : null}
               <th>Total hrs</th>
-              <th>Total</th>
+              {showMoney ? <th>Total</th> : null}
             </tr>
           </thead>
           <tbody>
@@ -167,11 +187,11 @@ function EmployeeRollup({ rows }) {
                   {row.active ? null : <span className="quiet"> · inactive</span>}
                 </td>
                 <td className="num">{row.unpaidHours.toFixed(2)}</td>
-                <td className="num">{money(row.unpaidPay)}</td>
+                {showMoney ? <td className="num">{money(row.unpaidPay)}</td> : null}
                 <td className="num">{row.paidHours.toFixed(2)}</td>
-                <td className="num">{money(row.paidPay)}</td>
+                {showMoney ? <td className="num">{money(row.paidPay)}</td> : null}
                 <td className="num">{row.totalHours.toFixed(2)}</td>
-                <td className="num">{money(row.totalPay)}</td>
+                {showMoney ? <td className="num">{money(row.totalPay)}</td> : null}
               </tr>
             ))}
           </tbody>

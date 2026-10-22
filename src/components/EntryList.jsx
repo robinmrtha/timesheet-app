@@ -3,9 +3,15 @@ import { api } from "../lib/api.js";
 import { entryAmount, formatDate, formatWhen, money, personName } from "../lib/format.js";
 import { Alert, Field, Modal, StatusBadge } from "./ui.jsx";
 
-export function EntryList({ entries, isAdmin, onChanged }) {
+export function EntryList({ entries, userId, showPeople, showMoney, editOwn, editTeam, canDelete, onChanged }) {
   const [editing, setEditing] = useState(null);
   const [removing, setRemoving] = useState(null);
+
+  function canEdit(entry) {
+    if (entry.status === "paid") return false;
+    if (entry.userId === userId) return editOwn || editTeam;
+    return editTeam;
+  }
 
   return (
     <>
@@ -14,7 +20,10 @@ export function EntryList({ entries, isAdmin, onChanged }) {
           <EntryCard
             key={entry.id}
             entry={entry}
-            isAdmin={isAdmin}
+            showPeople={showPeople}
+            showMoney={showMoney}
+            canEdit={canEdit(entry)}
+            canDelete={canDelete}
             onEdit={() => setEditing(entry)}
             onDelete={() => setRemoving(entry)}
           />
@@ -26,57 +35,54 @@ export function EntryList({ entries, isAdmin, onChanged }) {
             <tr>
               <th>Date</th>
               <th>Hours</th>
-              <th>Rate</th>
-              <th>Amount</th>
+              {showMoney ? <th>Rate</th> : null}
+              {showMoney ? <th>Amount</th> : null}
               <th>Status</th>
               <th>Notes</th>
-              {isAdmin ? <th>Employee</th> : null}
-              {isAdmin ? <th>Paid</th> : null}
+              {showPeople ? <th>Employee</th> : null}
+              {showPeople ? <th>Paid</th> : null}
               <th />
             </tr>
           </thead>
           <tbody>
-            {entries.map((entry) => {
-              const locked = entry.status === "paid";
-              return (
+            {entries.map((entry) => (
                 <tr key={entry.id}>
                   <td>{formatDate(entry.workDate)}</td>
                   <td className="num">{Number(entry.hours).toFixed(2)}</td>
-                  <td className="num">{money(entry.hourlyRate)}</td>
-                  <td className="num">{money(entryAmount(entry))}</td>
+                  {showMoney ? <td className="num">{money(entry.hourlyRate)}</td> : null}
+                  {showMoney ? <td className="num">{money(entryAmount(entry))}</td> : null}
                   <td>
                     <StatusBadge status={entry.status} />
                   </td>
                   <td>{entry.notes}</td>
-                  {isAdmin ? (
+                  {showPeople ? (
                     <td>
                       {personName({ name: entry.employeeName, email: entry.employeeEmail })}
                       {entry.employeeActive === false ? <span className="quiet"> · inactive</span> : null}
                     </td>
                   ) : null}
-                  {isAdmin ? (
+                  {showPeople ? (
                     <td>
                       {entry.paidAt ? formatWhen(entry.paidAt) : "—"}
                       {entry.paidReference ? <div className="quiet">{entry.paidReference}</div> : null}
                     </td>
                   ) : null}
                   <td className="row-actions">
-                    {locked ? (
-                      <span className="quiet">Locked</span>
-                    ) : (
+                    {canEdit(entry) ? (
                       <button className="btn btn-quiet btn-small" type="button" onClick={() => setEditing(entry)}>
                         Edit
                       </button>
-                    )}
-                    {isAdmin ? (
+                    ) : entry.status === "paid" ? (
+                      <span className="quiet">Locked</span>
+                    ) : null}
+                    {canDelete ? (
                       <button className="btn btn-danger btn-small" type="button" onClick={() => setRemoving(entry)}>
                         Delete
                       </button>
                     ) : null}
                   </td>
                 </tr>
-              );
-            })}
+              ))}
           </tbody>
         </table>
       </div>
@@ -104,14 +110,13 @@ export function EntryList({ entries, isAdmin, onChanged }) {
   );
 }
 
-function EntryCard({ entry, isAdmin, onEdit, onDelete }) {
-  const locked = entry.status === "paid";
+function EntryCard({ entry, showPeople, showMoney, canEdit, canDelete, onEdit, onDelete }) {
   return (
     <article className="entry-card">
       <div className="entry-card-top">
         <div>
           <p className="entry-date">{formatDate(entry.workDate)}</p>
-          {isAdmin ? (
+          {showPeople ? (
             <p className="quiet">
               {personName({ name: entry.employeeName, email: entry.employeeEmail })}
               {entry.employeeActive === false ? " · inactive" : ""}
@@ -120,26 +125,27 @@ function EntryCard({ entry, isAdmin, onEdit, onDelete }) {
         </div>
         <StatusBadge status={entry.status} />
       </div>
-      <p className="entry-amount">{money(entryAmount(entry))}</p>
+      {showMoney ? <p className="entry-amount">{money(entryAmount(entry))}</p> : null}
       <p className="entry-meta">
-        {Number(entry.hours).toFixed(2)} hrs · {money(entry.hourlyRate)}/hr
+        {Number(entry.hours).toFixed(2)} hrs
+        {showMoney ? ` · ${money(entry.hourlyRate)}/hr` : ""}
       </p>
       {entry.notes ? <p className="entry-notes">{entry.notes}</p> : null}
-      {isAdmin && (entry.paidAt || entry.paidReference) ? (
+      {showPeople && (entry.paidAt || entry.paidReference) ? (
         <p className="quiet">
           {entry.paidAt ? `Paid ${formatWhen(entry.paidAt)}` : ""}
           {entry.paidReference ? ` · ${entry.paidReference}` : ""}
         </p>
       ) : null}
       <div className="row-actions">
-        {locked ? (
-          <span className="quiet">Paid entries are locked</span>
-        ) : (
+        {canEdit ? (
           <button className="btn btn-quiet btn-small" type="button" onClick={onEdit}>
             Edit
           </button>
-        )}
-        {isAdmin ? (
+        ) : entry.status === "paid" ? (
+          <span className="quiet">Paid entries are locked</span>
+        ) : null}
+        {canDelete ? (
           <button className="btn btn-danger btn-small" type="button" onClick={onDelete}>
             Delete
           </button>

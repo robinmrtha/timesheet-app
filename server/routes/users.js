@@ -1,15 +1,18 @@
-import { hashPassword, publicUser, requireAdmin } from "../auth.js";
+import { publicUser } from "../auth.js";
+import { assertAny, assertCan, requireActor } from "../permissions.js";
 import { query } from "../db.js";
 import {
   httpError,
   json,
   parseEmail,
   parseName,
-  parsePassword,
   parseRole,
   readJson,
   requireUuid,
 } from "../http.js";
+
+// password_hash is NOT NULL and is not checked. Sign-in is Cloudflare Access.
+const UNUSED_PASSWORD_HASH = "not-used";
 
 const USER_COLUMNS = `id, email, name, role, active`;
 
@@ -24,7 +27,11 @@ async function activeAdminCount(exceptId) {
 }
 
 export async function listUsers(request) {
-  await requireAdmin(request);
+  const { permissions } = await requireActor(request);
+  assertAny(permissions, [
+    ["timesheet.admin", "view"],
+    ["timesheet.payroll", "view"],
+  ]);
   const { rows } = await query(
     `SELECT ${USER_COLUMNS}
      FROM users
@@ -34,19 +41,18 @@ export async function listUsers(request) {
 }
 
 export async function createUser(request) {
-  await requireAdmin(request);
+  const { permissions } = await requireActor(request);
+  assertCan(permissions, "timesheet.admin", "edit");
   const body = await readJson(request);
   const email = parseEmail(body.email);
   const name = parseName(body.name);
-  const password = parsePassword(body.password);
   const role = body.role == null || body.role === "" ? "employee" : parseRole(body.role);
-  const passwordHash = await hashPassword(password);
   try {
     const { rows } = await query(
       `INSERT INTO users (email, password_hash, name, role, active, created_at, updated_at)
        VALUES ($1, $2, $3, $4, true, now(), now())
        RETURNING ${USER_COLUMNS}`,
-      [email, passwordHash, name, role],
+      [email, UNUSED_PASSWORD_HASH, name, role],
     );
     return json({ user: publicUser(rows[0]) }, 201);
   } catch (error) {
@@ -56,7 +62,8 @@ export async function createUser(request) {
 }
 
 export async function patchUser(request, id) {
-  const admin = await requireAdmin(request);
+  const { user: admin, permissions } = await requireActor(request);
+  assertCan(permissions, "timesheet.admin", "edit");
   const userId = requireUuid(id, "User id");
   const body = await readJson(request);
   const { rows } = await query(`SELECT ${USER_COLUMNS} FROM users WHERE id = $1`, [userId]);
@@ -96,21 +103,4 @@ export async function patchUser(request, id) {
     if (error.code === "23505") throw httpError(409, "That email is already in use");
     throw error;
   }
-}
-
-export async function resetPassword(request, id) {
-  await requireAdmin(request);
-  const userId = requireUuid(id, "User id");
-  const body = await readJson(request);
-  const password = parsePassword(body.password);
-  const passwordHash = await hashPassword(password);
-  const { rows } = await query(
-    `UPDATE users
-     SET password_hash = $1, failed_login_count = 0, locked_until = NULL, updated_at = now()
-     WHERE id = $2
-     RETURNING id`,
-    [passwordHash, userId],
-  );
-  if (!rows[0]) throw httpError(404, "User not found");
-  return json({ ok: true });
 }

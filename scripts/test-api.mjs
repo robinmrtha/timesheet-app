@@ -6,8 +6,6 @@ pg.types.setTypeParser(1082, (value) => value);
 
 const TARGET = "postgres://timesheet:timesheet@127.0.0.1:5432/timesheet_test";
 const SOURCE = "postgres://timesheet:timesheet@127.0.0.1:5432/timesheet_source";
-const SECRET = "test-auth-secret-with-32-characters-min";
-
 const ADMIN_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const WORKER_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const FORMER_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
@@ -56,10 +54,11 @@ function runMigration(inactiveEmails) {
   });
 }
 
-async function request(base, path, { method = "GET", body, cookie, origin = true } = {}) {
+async function request(base, path, { method = "GET", body, cookie, email, origin = true } = {}) {
   const headers = {};
   if (body !== undefined) headers["content-type"] = "application/json";
   if (cookie) headers.cookie = cookie;
+  if (email) headers["x-dev-user-email"] = email;
   if (origin) headers.origin = base;
   const response = await fetch(`${base}${path}`, {
     method,
@@ -71,11 +70,6 @@ async function request(base, path, { method = "GET", body, cookie, origin = true
   if (text) data = JSON.parse(text);
   const setCookie = response.headers.getSetCookie?.() || [];
   return { status: response.status, data, setCookie };
-}
-
-function cookieOf(setCookie) {
-  const raw = setCookie.find((item) => item.startsWith("hb_session="));
-  return raw ? raw.split(";")[0] : "";
 }
 
 async function resetDatabases() {
@@ -272,155 +266,157 @@ async function seedApi(hashes) {
   });
 }
 
-async function apiTests(base) {
+async function apiTests(base, hashes) {
   const openId = "33333333-3333-4333-8333-333333333332";
   const paidId = "33333333-3333-4333-8333-333333333331";
   const otherId = "33333333-3333-4333-8333-333333333333";
   const formerEntryId = "33333333-3333-4333-8333-333333333334";
 
   const anonymous = await request(base, "/api/auth/session");
-  check(anonymous.status === 200 && anonymous.data.user === null, "anonymous session is empty");
+  check(
+    anonymous.status === 200 && anonymous.data.user === null && anonymous.data.reason === "unauthenticated",
+    "anonymous session is empty",
+  );
 
-  const bad = await request(base, "/api/auth/login", {
-    method: "POST",
-    body: { email: "worker@example.com", password: "wrong-password" },
-  });
-  check(bad.status === 401, "bad password is rejected");
-
-  const inactive = await request(base, "/api/auth/login", {
-    method: "POST",
-    body: { email: "former@example.com", password: "Former-Pass-123" },
-  });
-  check(inactive.status === 403, "inactive user cannot sign in");
-  check(!cookieOf(inactive.setCookie), "inactive login does not set a session");
-
-  const workerLogin = await request(base, "/api/auth/login", {
+  const removedLogin = await request(base, "/api/auth/login", {
     method: "POST",
     body: { email: "worker@example.com", password: "Worker-Pass-123" },
   });
-  check(workerLogin.status === 200, "employee signs in with a $2a$ hash");
-  const workerCookie = cookieOf(workerLogin.setCookie);
-  check(workerCookie.startsWith("hb_session="), "session cookie is set");
-  check(/httponly/i.test(workerLogin.setCookie[0]), "session cookie is HttpOnly");
-  check(!/;\s*secure/i.test(workerLogin.setCookie[0]), "http cookie is not marked Secure");
-  check(!JSON.stringify(workerLogin.data).includes("password"), "login response has no password hash");
+  check(removedLogin.status === 404, "password login is removed");
 
-  const workerEntries = await request(base, `/api/entries?userId=${OTHER_ID}`, { cookie: workerCookie });
+  const inactive = await request(base, "/api/auth/session", { email: "former@example.com" });
+  check(inactive.status === 200 && inactive.data.reason === "not_setup", "inactive user is not set up");
+  check(
+    inactive.data.message === "Your account isn't set up in Timesheet. Ask Robin.",
+    "inactive session explains who to ask",
+  );
+  const inactiveMe = await request(base, "/api/me", { email: "former@example.com" });
+  check(inactiveMe.status === 403, "inactive user cannot call the API");
+
+  const workerSession = await request(base, "/api/auth/session", { email: "Worker@Example.com" });
+  check(workerSession.status === 200 && workerSession.data.user.email === "worker@example.com", "email maps case-insensitively");
+  check(workerSession.data.user.role === "employee", "mapped user keeps the employee role");
+  check(!JSON.stringify(workerSession.data).includes("password"), "session response has no password hash");
+
+  const workerEntries = await request(base, "/api/entries", { email: "worker@example.com" });
   check(workerEntries.status === 200, "employee can list entries");
   const workerIds = workerEntries.data.entries.map((entry) => entry.userId);
   check(workerIds.every((id) => id === WORKER_ID), "employee cannot see other people's entries");
   check(!workerIds.includes(OTHER_ID) && !workerIds.includes(FORMER_ID), "foreign entries are absent");
+  const foreignEntries = await request(base, `/api/entries?userId=${OTHER_ID}`, { email: "worker@example.com" });
+  check(foreignEntries.status === 403, "employee cannot request someone else's entries");
 
-  const forbiddenUsers = await request(base, "/api/users", { cookie: workerCookie });
+  const forbiddenUsers = await request(base, "/api/users", { email: "worker@example.com" });
   check(forbiddenUsers.status === 403, "employee cannot list the team");
   const forbiddenPay = await request(base, "/api/admin/pay", {
     method: "POST",
-    cookie: workerCookie,
+    email: "worker@example.com",
     body: { userId: WORKER_ID },
   });
   check(forbiddenPay.status === 403, "employee cannot mark entries paid");
   const forbiddenRate = await request(base, "/api/rates", {
     method: "POST",
-    cookie: workerCookie,
+    email: "worker@example.com",
     body: { userId: WORKER_ID, hourlyRate: 40, effectiveFrom: "2026-01-01" },
   });
   check(forbiddenRate.status === 403, "employee cannot create rates");
-  const foreignRates = await request(base, `/api/rates?userId=${OTHER_ID}`, { cookie: workerCookie });
+  const foreignRates = await request(base, `/api/rates?userId=${OTHER_ID}`, { email: "worker@example.com" });
   check(foreignRates.status === 403, "employee cannot read someone else's rates");
-  const ownRates = await request(base, "/api/rates", { cookie: workerCookie });
+  const ownRates = await request(base, "/api/rates", { email: "worker@example.com" });
   check(ownRates.status === 200 && ownRates.data.rates.length === 2, "employee can read their own rates");
 
   const escalate = await request(base, "/api/me", {
     method: "PATCH",
-    cookie: workerCookie,
+    email: "worker@example.com",
     body: { role: "admin" },
   });
   check(escalate.status === 403, "employee cannot change their role");
 
   const editPaid = await request(base, `/api/entries/${paidId}`, {
     method: "PATCH",
-    cookie: workerCookie,
+    email: "worker@example.com",
     body: { hours: 1 },
   });
   check(editPaid.status === 403, "employee cannot edit a paid entry");
   const editOther = await request(base, `/api/entries/${otherId}`, {
     method: "PATCH",
-    cookie: workerCookie,
+    email: "worker@example.com",
     body: { hours: 1 },
   });
   check(editOther.status === 404, "employee cannot edit someone else's entry");
-  const remove = await request(base, `/api/entries/${openId}`, { method: "DELETE", cookie: workerCookie });
+  const remove = await request(base, `/api/entries/${openId}`, { method: "DELETE", email: "worker@example.com" });
   check(remove.status === 403, "employee cannot delete entries");
   const editOpen = await request(base, `/api/entries/${openId}`, {
     method: "PATCH",
-    cookie: workerCookie,
+    email: "worker@example.com",
     body: { hours: 4.5, notes: "Updated open day" },
   });
   check(editOpen.status === 200 && editOpen.data.entry.hours === 4.5, "employee can edit an unpaid entry");
   check(editOpen.data.entry.hourlyRate === 30, "editing hours keeps the saved rate");
 
-  const noOrigin = await request(base, "/api/auth/logout", { method: "POST", cookie: workerCookie, origin: false });
+  const noOrigin = await request(base, "/api/me", {
+    method: "PATCH",
+    email: "worker@example.com",
+    origin: false,
+    body: { name: "No Origin" },
+  });
   check(noOrigin.status === 403, "mutating requests require an Origin header");
 
-  const adminLogin = await request(base, "/api/auth/login", {
-    method: "POST",
-    body: { email: "admin@example.com", password: "Admin-Pass-123" },
-  });
-  const adminCookie = cookieOf(adminLogin.setCookie);
-  check(adminLogin.status === 200 && adminLogin.data.user.role === "admin", "admin signs in");
+  const adminSession = await request(base, "/api/auth/session", { email: "admin@example.com" });
+  check(adminSession.status === 200 && adminSession.data.user.role === "admin", "admin email maps to the admin role");
 
-  const rewritten = await request(base, "/api?__path=auth/session", { cookie: adminCookie });
+  const rewritten = await request(base, "/api?__path=auth/session", { email: "admin@example.com" });
   check(rewritten.status === 200 && rewritten.data.user.email === "admin@example.com", "rewritten /api path still routes");
 
-  const allEntries = await request(base, "/api/entries?from=2026-10-01&to=2026-10-31", { cookie: adminCookie });
+  const allEntries = await request(base, "/api/entries?from=2026-10-01&to=2026-10-31", { email: "admin@example.com" });
   const visible = new Set(allEntries.data.entries.map((entry) => entry.id));
   check(visible.has(formerEntryId), "admin still sees an inactive user's entries");
   check(visible.has(otherId), "admin sees every employee's entries");
 
-  const team = await request(base, "/api/users", { cookie: adminCookie });
+  const team = await request(base, "/api/users", { email: "admin@example.com" });
   check(team.data.users.some((user) => user.email === "former@example.com" && user.active === false), "team list includes inactive users");
 
   const zeroRate = await request(base, "/api/entries", {
     method: "POST",
-    cookie: workerCookie,
+    email: "worker@example.com",
     body: { workDate: "2023-01-01", hours: 1, notes: "before rates", hourlyRate: 999 },
   });
   check(zeroRate.status === 201 && zeroRate.data.entry.hourlyRate === 0, "no rate on or before the date snapshots $0");
   check(zeroRate.data.rateFound === false, "client cannot supply the rate");
   const midRate = await request(base, "/api/entries", {
     method: "POST",
-    cookie: workerCookie,
+    email: "worker@example.com",
     body: { workDate: "2025-05-01", hours: 2, notes: "first rate" },
   });
   check(midRate.data.entry.hourlyRate === 20, "snapshot uses the latest rate on or before the date");
   const newRate = await request(base, "/api/entries", {
     method: "POST",
-    cookie: workerCookie,
+    email: "worker@example.com",
     body: { workDate: "2026-06-01", hours: 3, notes: "raise day" },
   });
   check(newRate.data.entry.hourlyRate === 30, "snapshot uses the rate effective that day");
   const splitA = await request(base, "/api/entries", {
     method: "POST",
-    cookie: workerCookie,
+    email: "worker@example.com",
     body: { workDate: "2026-10-20", hours: 4, notes: "Morning shift" },
   });
   const splitB = await request(base, "/api/entries", {
     method: "POST",
-    cookie: workerCookie,
+    email: "worker@example.com",
     body: { workDate: "2026-10-20", hours: 3.5, notes: "Evening shift" },
   });
   check(splitA.status === 201 && splitB.status === 201, "two entries on the same date are allowed");
 
   const tooLong = await request(base, "/api/entries", {
     method: "POST",
-    cookie: workerCookie,
+    email: "worker@example.com",
     body: { workDate: "2026-10-21", hours: 30, notes: "too long" },
   });
   check(tooLong.status === 400, "more than 24 hours is rejected");
 
   const pay = await request(base, "/api/admin/pay", {
     method: "POST",
-    cookie: adminCookie,
+    email: "admin@example.com",
     body: { userId: WORKER_ID, from: "2026-10-01", to: "2026-10-31", reference: "Check 88" },
   });
   check(pay.status === 200 && pay.data.updated >= 1, "admin marks unpaid entries in the range");
@@ -439,96 +435,51 @@ async function apiTests(base) {
 
   const adminEditPaid = await request(base, `/api/entries/${paidId}`, {
     method: "PATCH",
-    cookie: adminCookie,
+    email: "admin@example.com",
     body: { hours: 6 },
   });
   check(adminEditPaid.status === 200 && adminEditPaid.data.entry.hours === 6, "admin can correct a paid entry");
   const employeeLocked = await request(base, `/api/entries/${openId}`, {
     method: "PATCH",
-    cookie: workerCookie,
+    email: "worker@example.com",
     body: { hours: 1 },
   });
   check(employeeLocked.status === 403, "employee still cannot edit after it is paid");
 
   const created = await request(base, "/api/users", {
     method: "POST",
-    cookie: adminCookie,
+    email: "admin@example.com",
     body: { name: "New Hire", email: "new.hire@example.com", password: "New-Hire-123", role: "employee" },
   });
-  check(created.status === 201, "admin can create an employee");
-  const hireLogin = await request(base, "/api/auth/login", {
-    method: "POST",
-    body: { email: "new.hire@example.com", password: "New-Hire-123" },
+  check(created.status === 201, "admin can create an employee without a password");
+  const hire = await request(base, "/api/me", { email: "new.hire@example.com" });
+  check(hire.status === 200 && hire.data.user.role === "employee", "created employee is mapped by email");
+  await withClient(TARGET, async (client) => {
+    const hireRow = await client.query(`SELECT password_hash FROM users WHERE email = 'new.hire@example.com'`);
+    check(hireRow.rows[0].password_hash === "not-used", "new accounts do not store a password");
+    const kept = await client.query(`SELECT password_hash FROM users WHERE email = 'worker@example.com'`);
+    check(kept.rows[0].password_hash === hashes.worker, "existing password hashes stay in the table");
   });
-  check(hireLogin.status === 200, "created employee can sign in");
 
   const reset = await request(base, `/api/users/${WORKER_ID}/password`, {
     method: "POST",
-    cookie: adminCookie,
+    email: "admin@example.com",
     body: { password: "Reset-Pass-123" },
   });
-  check(reset.status === 200, "admin can reset a password");
-  const oldPassword = await request(base, "/api/auth/login", {
-    method: "POST",
-    body: { email: "worker@example.com", password: "Worker-Pass-123" },
-  });
-  check(oldPassword.status === 401, "old password stops working");
-  const newPassword = await request(base, "/api/auth/login", {
-    method: "POST",
-    body: { email: "worker@example.com", password: "Reset-Pass-123" },
-  });
-  check(newPassword.status === 200, "reset password works");
-  const freshWorker = cookieOf(newPassword.setCookie);
+  check(reset.status === 404, "password reset is removed");
   const changed = await request(base, "/api/auth/password", {
     method: "POST",
-    cookie: freshWorker,
+    email: "worker@example.com",
     body: { currentPassword: "Reset-Pass-123", newPassword: "Changed-Pass-123" },
   });
-  check(changed.status === 200, "signed-in user can change their password");
+  check(changed.status === 404, "password change is removed");
 
   const selfDemote = await request(base, `/api/users/${ADMIN_ID}`, {
     method: "PATCH",
-    cookie: adminCookie,
+    email: "admin@example.com",
     body: { active: false },
   });
   check(selfDemote.status === 400, "admin cannot deactivate their own account");
-
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const failed = await request(base, "/api/auth/login", {
-      method: "POST",
-      body: { email: "lockout@example.com", password: "nope" },
-    });
-    check(failed.status === 401, `lockout attempt ${attempt + 1} is invalid`);
-  }
-  const locked = await request(base, "/api/auth/login", {
-    method: "POST",
-    body: { email: "lockout@example.com", password: "Lock-Pass-123" },
-  });
-  check(locked.status === 429, "account locks after repeated failures");
-
-  await withClient(TARGET, async (client) => {
-    await client.query(
-      `INSERT INTO login_attempts (ip, email, created_at)
-       SELECT '203.0.113.10', 'flood@example.com', now() FROM generate_series(1, 60)`,
-    );
-  });
-  const flooded = await request(base, "/api/auth/login", {
-    method: "POST",
-    body: { email: "admin@example.com", password: "Admin-Pass-123" },
-  });
-  // The local server sees 127.0.0.1, not the inserted IP. Hit the limit for 127.0.0.1 directly.
-  check(flooded.status === 200 || flooded.status === 429, "login still responds after unrelated IP rows");
-  await withClient(TARGET, async (client) => {
-    await client.query(
-      `INSERT INTO login_attempts (ip, email, created_at)
-       SELECT '127.0.0.1', 'flood@example.com', now() FROM generate_series(1, 60)`,
-    );
-  });
-  const limited = await request(base, "/api/auth/login", {
-    method: "POST",
-    body: { email: "admin@example.com", password: "Admin-Pass-123" },
-  });
-  check(limited.status === 429, "IP rate limit blocks further logins");
 }
 
 async function main() {
@@ -545,12 +496,15 @@ async function main() {
   await seedApi(hashes);
 
   process.env.DATABASE_URL = TARGET;
-  process.env.AUTH_SECRET = SECRET;
+  process.env.ACCESS_DEV_BYPASS = "1";
+  process.env.PERMISSIONS_ROLE_FALLBACK = "1";
+  delete process.env.ACCESS_DEV_EMAIL;
+  delete process.env.ACCESS_AUD;
   const { startServer } = await import("../server/local-server.js");
   const { closePool } = await import("../server/db.js");
   const started = await startServer(0);
   try {
-    await apiTests(started.url);
+    await apiTests(started.url, hashes);
   } finally {
     await new Promise((resolve) => started.server.close(resolve));
     await closePool();

@@ -5,9 +5,9 @@ Vercel stays the production target until you cut DNS over. Both targets build fr
 | | Vercel (current) | Cloudflare Workers |
 | --- | --- | --- |
 | App | Vite build, `vercel.json` SPA rewrite | Vite build, Workers static assets, SPA fallback |
-| API | `api/index.js` rewrites `/api/*` to `server/router.js` | `worker/index.js` sends `/api` and `/api/*` to the same router |
+| API | `api/index.js` rewrites `/api/*` to `server/router.js` | `worker/index.js` sends `/timesheet/api/*` to the same router |
 | Database | `pg` + `@vercel/functions` `attachDatabasePool` | `@neondatabase/serverless` HTTP, except localhost (see below) |
-| Secrets | Vercel project env | `wrangler secret put` (`DATABASE_URL`, `AUTH_SECRET`) |
+| Secrets | Vercel project env | `wrangler secret put` (`DATABASE_URL`, `ACCESS_AUD`) |
 
 Do not commit secret values. `wrangler.jsonc` lists the secret **names** only.
 
@@ -18,7 +18,7 @@ Workers use the Neon serverless driver’s HTTP API (`neon()` from `@neondatabas
 This fits the Neon free plan and this app better than `pg` through Hyperdrive:
 
 - The free Neon plan already exposes SQL-over-HTTP. No Hyperdrive config id, and the Worker secret stays the same pooled `DATABASE_URL` Vercel uses (hostname contains `-pooler`).
-- The API issues one statement at a time. There is no multi-statement transaction. A login is a handful of queries, under the free-plan limit of 50 external subrequests per request.
+- The API issues one statement at a time. There is no multi-statement transaction. A typical request looks up one user, under the free-plan limit of 50 external subrequests per request. The Access JWKS is cached, so it is not fetched on that request.
 - Hyperdrive is on the Workers free plan (100,000 queries per day) and would let us keep `pg`, but it caches non-mutating queries by default. Hours, pay status, and lockouts need to be visible on the next request. Turning that cache off removes the reason to add another service.
 - Hyperdrive would also replace `DATABASE_URL` with a binding connection string. The HTTP driver reads the secret directly.
 
@@ -28,41 +28,89 @@ Vercel does not take this path. Outside Workers, `server/db.js` still uses `pg` 
 
 People in the US and Nepal hit a Worker near them. The hop to Neon is wall-clock time, not CPU. If the Neon compute is in the US, Nepal is slower by that round trip, and a compute that has scaled to zero adds a cold start of a few hundred milliseconds on the first query. Use the pooled connection string either way.
 
-## Passwords and the 10 ms CPU limit
+## Sign-in (Cloudflare Access)
 
 The Workers free plan allows **10 ms of CPU time per HTTP request**. Waiting on the network does not count. [Limits](https://developers.cloudflare.com/workers/platform/limits/#cpu-time).
 
-Existing hashes are bcrypt cost 10 (`$2a$` from Supabase, `$2b$` from bcryptjs). They have to keep working, and nobody should reset a password for the move.
+`hbzr.us` sits behind Cloudflare Access on the team domain `hbzr.cloudflareaccess.com`. People sign in once there, with Google or an email one-time code. Timesheet does not ask for a password. `users.password_hash` and the old lockout columns stay in the database and are not read.
 
-Measured on this machine. Node 22 figures are the middle of three runs. The workerd column is one request to a local Worker (`navigator.userAgent` was `Cloudflare-Workers`):
+Access adds `Cf-Access-Jwt-Assertion` to each request that reaches the Worker. The API treats a verified token as the session:
 
-| Operation | Node 22 | local workerd |
-| --- | --- | --- |
-| `bcryptjs` `compare`, cost 10 | 62 ms | 72 ms |
-| PBKDF2-SHA256, 20,000 iterations (`crypto.subtle`) | 3 ms | 2 ms |
-| PBKDF2-SHA256, 100,000 iterations | 12 ms | 12 ms |
-| PBKDF2-SHA256, 600,000 iterations (OWASP 2023) | 72 ms | 71 ms |
+1. Check the JWT is RS256. `alg` of `none` or HMAC is rejected before any key work.
+2. Verify the signature with Web Crypto (`crypto.subtle.verify`) against the public keys at `https://hbzr.cloudflareaccess.com/cdn-cgi/access/certs`. Match `kid` to a key in `keys`. Do not trust `public_cert` alone. [Validate JWTs](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/).
+3. Cache the imported keys in the isolate for one hour. A `kid` the cache does not know triggers one refresh, and further unknown kids are ignored for a minute, so a bad token cannot fetch the certs on every request. Access rotates keys about every 6 weeks and keeps the previous key for 7 days, so that refresh is enough. The fetch is network time, not CPU. A normal request does not fetch.
+4. Require `iss` of `https://hbzr.cloudflareaccess.com`, `type` of `app`, and `aud` equal to the `ACCESS_AUD` secret (string or one entry in an array). `exp` and `nbf` allow 60 seconds of clock skew.
+5. Take `email`, trim it, and compare it case-insensitively to `users.email`. The row has to exist and be active. Section access comes from the hub Worker, described below. The JWT does not choose it. `users.role` is not used unless `PERMISSIONS_ROLE_FALLBACK=1`.
 
-`wrangler dev` does not enforce the 10 ms cap, so these are the cost of the work, not a production CPU trace from Cloudflare’s edge.
+If the email is missing from `users`, or the row is inactive, the API returns that fact and the page says: **Your account isn't set up in Timesheet. Ask Robin.**
 
-Cloudflare recommends the Web Crypto API because it is faster than pure JavaScript, not because it is excluded from CPU time. Native PBKDF2 at a cost comparable to bcrypt does not fit in 10 ms. Dropping to ~20,000 iterations would fit and would be a weaker hash than the cost-10 bcrypt already stored.
+Log out sends the browser to `https://hbzr.cloudflareaccess.com/cdn-cgi/access/logout`, which ends the Access session for the other apps too.
 
-So the Worker does not re-hash, and it does not run bcryptjs on the Neon path:
+Static files are not checked again inside the Worker. Access already gates the hostname, and the API re-checks the JWT before it returns data. That keeps asset requests off the CPU budget.
 
-- Verification is `SELECT crypt($1, $2) = $2` in Postgres (`pgcrypto`). Cost-10 bcrypt runs on the database. The Worker waits on the query.
-- New passwords on Workers are `crypt(password, gen_salt('bf', 10))`, still `$2a$` cost 10.
-- Vercel keeps bcryptjs. It can verify pgcrypto hashes, and pgcrypto can verify bcryptjs hashes.
-- `pgcrypto` does not accept a `$2b$` or `$2y$` label (it returns false, it does not throw). The Worker copies that prefix to `$2a$` for the `crypt()` call only. The value stored in `users.password_hash` stays as it was. Checked for ASCII, non-ASCII, and high-bit passwords against PostgreSQL 16.
-- The password is a bound parameter, not interpolated into the SQL text. Application logs record the backend name and Postgres error codes, not the password or the query text.
-- Unknown emails are checked against a precomputed cost-10 dummy hash. The Worker never calls `bcrypt.hash()` during a request.
+### ACCESS_AUD
 
-Before the first Workers login, enable the extension once on the **direct** Neon connection (no `-pooler`):
+In the Cloudflare dashboard: **Zero Trust → Access controls → Applications →** the one Access application for `hbzr.us` **→ Additional settings → Application Audience (AUD) tag**. Timesheet does not have its own Access app. The tag does not change unless that application is deleted.
 
 ```bash
-psql "$DATABASE_URL_UNPOOLED" -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+printf '%s' "$ACCESS_AUD" | npx wrangler secret put ACCESS_AUD
 ```
 
-`db/schema.sql` already includes that statement for new databases. A pooled connection can run `crypt()` afterwards; it should not be used to create the extension.
+Do not commit the value. `wrangler deploy` refuses to continue when `ACCESS_AUD` or `DATABASE_URL` is missing. `AUTH_SECRET` is no longer used for a session cookie. An old secret left on the Worker is unused. There is no permissions token.
+
+### Local bypass
+
+`ACCESS_DEV_BYPASS` is off unless it is exactly `1`. When it is `1`, it applies only if the request hostname is `localhost`, `127.0.0.1`, `::1`, or `[::1]`. The user is the `X-Dev-User-Email` header, or `ACCESS_DEV_EMAIL` when the header is absent. A request that includes `Cf-Access-Jwt-Assertion` is still verified; a bad token does not fall through to the bypass.
+
+Do not set the flag on the deployed Worker. `wrangler dev` reads it from `.dev.vars`. `npm run dev` reads it from `.env`. Put a placeholder in `ACCESS_AUD` for local dev; the bypass does not check it. Use the real tag when you send a real Access JWT.
+
+## Section permissions
+
+Timesheet does not decide who can see a section. The hub Worker `hbzr-app` does, through its `Hub` entrypoint. After the Access email matches an active `users` row, this Worker calls that binding with the verified email and enforces the answer on every API route. The browser only hides tabs and turns forms read-only; it is not the check.
+
+The binding in `wrangler.jsonc` is the same as:
+
+```toml
+[[services]]
+binding = "HUB"
+service = "hbzr-app"
+entrypoint = "Hub"
+```
+
+The call is `env.HUB.fetch("https://hub/internal/permissions?email=" + encodeURIComponent(email))`. `hub` is the service binding, not a public hostname. There is no `PERMISSIONS_API_TOKEN` and no `Authorization` header. The email is the one from the verified Access JWT, not a value from the browser. `createHubPermissionsSource` is the adapter. If `Hub` later exposes an RPC method, that function is the piece to replace.
+
+Sections:
+
+| Key | What it covers |
+| --- | --- |
+| `timesheet.own` | Add and edit your own unpaid hours, and read your own entries and the rate that applies to them |
+| `timesheet.team` | Read other people’s hours. Edit can change and delete those entries |
+| `timesheet.payroll` | Pay rates and the pay report. Edit can add or delete rates and mark entries paid |
+| `timesheet.admin` | The team list and settings. Edit can add people and change their profile, role, or active flag |
+
+Each section is `none`, `view`, or `edit`. A missing key, or any other word, is `none`. View can read. Edit can read and change. `isOwner: true` is edit on every section, including when `active` is false. A person who is not an owner is refused when `active` is false.
+
+```json
+{
+  "email": "person@example.com",
+  "active": true,
+  "isOwner": false,
+  "sections": {
+    "timesheet.own": "edit",
+    "timesheet.team": "view",
+    "timesheet.payroll": "none",
+    "timesheet.admin": "none"
+  }
+}
+```
+
+A 400 body is `{"error":"Pass an email"}`. Any other path on that binding is a 404. Both are errors. A missing binding, a non-JSON body, or any failed call is no access. The result is kept in the isolate for 30 seconds per email. A failure is not cached, so the next request tries again. The `email` in the JSON must match the email that was asked for, ignoring case.
+
+If every section is `none`, or the lookup fails, the page says **Ask Robin for access.** That is different from a missing or inactive Timesheet user, which still says **Your account isn't set up in Timesheet. Ask Robin.**
+
+### Role fallback
+
+`PERMISSIONS_ROLE_FALLBACK` is off unless it is exactly `1`. When it is `1`, the Worker does not call the hub. An active `users.role` of `admin` is edit on every section. Any other active role is edit on `timesheet.own` only. Use that for local development, where the `HUB` binding is not the deployed hub. Do not set it on the deployed Worker. The column stays in the database either way.
 
 ## Local development
 
@@ -71,56 +119,88 @@ npm install
 createdb timesheet   # or any local database
 psql "$DATABASE_URL" -f db/schema.sql
 cp .dev.vars.example .dev.vars
-# Edit .dev.vars: local DATABASE_URL and an AUTH_SECRET of at least 16 characters.
+# Edit .dev.vars: local DATABASE_URL, a placeholder ACCESS_AUD,
+# ACCESS_DEV_BYPASS=1, ACCESS_DEV_EMAIL set to a user in the database,
+# and PERMISSIONS_ROLE_FALLBACK=1.
 npm run cf:dev
 ```
 
-`npm run cf:dev` builds the Vite client into `dist/` and starts `wrangler dev` (default http://127.0.0.1:8787). `.dev.vars` is gitignored. If that file exists, Wrangler does not also load `.env`.
+`npm run cf:dev` builds the Vite client into `dist/` and starts `wrangler dev` (default http://127.0.0.1:8787). The app is mounted at `/timesheet/`. `.dev.vars` is gitignored. If that file exists, Wrangler does not also load `.env`.
 
-Sign in, then call an API such as `GET /api/me` with the `hb_session` cookie. `POST` requests need an `Origin` header equal to the page origin.
+With the bypass on, open `http://127.0.0.1:8787/timesheet/` as `ACCESS_DEV_EMAIL`. `GET /timesheet/api/me` returns that user. There is no password form. `POST` requests need an `Origin` header equal to the page origin. `npm run dev` serves the same path at `http://127.0.0.1:5173/timesheet/`.
 
-`npm test` resets the local `timesheet_test`, `timesheet_source`, and `timesheet_cf` databases. It checks pgcrypto verification (including a `$2b$` hash), bcryptjs verification of a pgcrypto hash, client IP selection, and the existing API.
+`npm test` resets the local `timesheet_test`, `timesheet_source`, and `timesheet_cf` databases. It checks Access JWT verification against a mocked JWKS, email-to-user mapping, client IP selection, and the API.
 
-## Deploy the Worker (no custom domain yet)
+## Deploy the Worker
 
-This does not attach `hbzr.us` and does not change Vercel.
+The only route is `hbzr.us/timesheet*`. Do not add a custom domain, and do not add a route for `hbzr.us`, `hbzr.us/*`, or `www.hbzr.us`. The apex stays on `hbzr-app`. Deploy publishes the path route; it does not take the hostname.
 
 ```bash
 npx wrangler login
 printf '%s' "$DATABASE_URL" | npx wrangler secret put DATABASE_URL
-printf '%s' "$AUTH_SECRET" | npx wrangler secret put AUTH_SECRET
+printf '%s' "$ACCESS_AUD" | npx wrangler secret put ACCESS_AUD
 npm run cf:deploy
 ```
 
-Use the pooled Neon URL for `DATABASE_URL`, the same value as on Vercel. Use the same `AUTH_SECRET` as Vercel so a session cookie issued on one host verifies on the other after DNS moves.
+Use the pooled Neon URL for `DATABASE_URL`. `ACCESS_AUD` is the AUD tag of the single Access application in front of `hbzr.us`. Do not set `ACCESS_DEV_BYPASS` or `PERMISSIONS_ROLE_FALLBACK` here.
 
-`wrangler deploy` refuses to continue when `DATABASE_URL` or `AUTH_SECRET` is missing on the Worker. `npm run cf:deploy` is `npm run build && wrangler deploy`.
+`wrangler deploy` refuses to continue when `DATABASE_URL` or `ACCESS_AUD` is missing on the Worker. `npm run cf:deploy` is `npm run build && wrangler deploy`.
 
-Open the `workers.dev` URL Wrangler prints (`hbzr-timesheet.<account>.workers.dev`). Sign in as an admin and as an employee with their current passwords. Confirm an inactive account still cannot sign in, and that a new entry shows up on refresh.
+Open `https://hbzr.us/timesheet`. Access should ask for Google or an email code, not a Timesheet password. `https://hbzr.us/` is the hub, not this Worker. The `workers.dev` URL is not behind Access unless you put an Access application on it too.
 
 Workers Logs and traces are enabled at full sample rate. This is a small staff app. Lower `observability.logs.head_sampling_rate` and `observability.traces.head_sampling_rate` in `wrangler.jsonc` if the volume grows. The top-level `observability.enabled` flag turns on logs; traces are enabled on their own.
 
-## Cut over hbzr.us
+## Where this Worker is mounted
 
-Do this only after the `workers.dev` check. The Worker config intentionally has no route, so deploy does not take the domain.
+`hbzr.us` is already the hub’s hostname. This Worker does not replace that DNS record and does not get a certificate of its own for the apex.
 
-`hbzr.us` has to be an active zone on the same Cloudflare account. Custom domains are not created on a hostname that already has a CNAME. Vercel’s record has to be removed before the Worker domain can be added, so this step is the cut.
+The route in `wrangler.jsonc` is:
 
-1. In the Cloudflare dashboard, open the `hbzr.us` zone and confirm the account owns it. If the zone is still on another DNS host, add the site to Cloudflare and point the registrar at Cloudflare’s nameservers first. Leave the existing records in place until the window below.
-2. Remove the Vercel DNS record for the hostname you are moving (apex `hbzr.us`, and `www` if you use it).
-3. Attach the Worker. Either in the dashboard: **Workers & Pages** → **hbzr-timesheet** → **Settings** → **Domains & Routes** → **Add** → **Custom domain** → `hbzr.us`. Or add this to `wrangler.jsonc` and run `npm run cf:deploy`:
+```jsonc
+"routes": [
+  { "pattern": "hbzr.us/timesheet*", "zone_name": "hbzr.us" }
+]
+```
 
-   ```jsonc
-   "routes": [
-     { "pattern": "hbzr.us", "custom_domain": true }
-   ]
-   ```
+The same route in toml, which is what Wrangler would read only if `wrangler.jsonc` were not present (`wrangler.jsonc` wins when both exist):
 
-   Add `{ "pattern": "www.hbzr.us", "custom_domain": true }` as well if `www` should hit the Worker. Cloudflare creates the DNS record and the certificate. Certificate issuance can take a few minutes.
-4. Sign in on `https://hbzr.us` with an existing password. Confirm hours and rates. Cookies are host-only, so a session started on `workers.dev` is not sent to `hbzr.us`; sign in again on the real host.
-5. Leave the Vercel project in place until that check is done. Then remove `hbzr.us` from the Vercel project so it does not try to claim the name. The Vercel app can stay deployed on its `vercel.app` hostname.
+```toml
+[[routes]]
+pattern = "hbzr.us/timesheet*"
+zone_name = "hbzr.us"
+```
 
-To roll back, remove the custom domain from the Worker and point the DNS record back at Vercel. Database rows are shared, including any cost-10 hashes created while the Worker was live. Vercel’s bcryptjs path verifies those.
+There is no `routes` entry for `hbzr.us`, `hbzr.us/*`, or `www.hbzr.us`. Do not add one.
+
+That pattern is the whole public surface. `https://hbzr.us/timesheet` and `https://hbzr.us/timesheet/api/…` hit this Worker. Anything else, including `/` and `/api/…`, is a 404 if it reaches this Worker. The client is built with Vite `base` `/timesheet/`. The PWA manifest `start_url` and `scope` are `/timesheet/`. Unknown paths under `/timesheet/` (not `/timesheet/api` and not a real file) fall back to the SPA. A missing file under `/timesheet/assets/` stays a 404. The header has a Home link to `/`, which is the hub launcher.
+
+`npm run dev` redirects `http://127.0.0.1:5173/` to `/timesheet/` because the hub is not running there. That redirect is not what production `/` does.
+
+## Legacy paths the hub should redirect
+
+`hbzr-app` owns `https://hbzr.us/`. Do not send `/` to Timesheet. Old bookmarks from when Timesheet lived at the root should land on `/timesheet/`. The hash is not sent to the Worker, so the launcher page has to read it in the browser.
+
+Redirect these, keeping the query string:
+
+| Legacy path | Destination |
+| --- | --- |
+| `/#/` | `/timesheet/` |
+| `/#/add` | `/timesheet/#/add` |
+| `/#/pay` | `/timesheet/#/pay` |
+| `/#/rates` | `/timesheet/#/rates` |
+| `/#/team` | `/timesheet/#/team` |
+| `/#/account` | `/timesheet/#/account` |
+| `/api/auth/session` | `/timesheet/api/auth/session` |
+| `/api/me` | `/timesheet/api/me` |
+| `/api/users` and `/api/users/:id` | `/timesheet/api/users` and `/timesheet/api/users/:id` |
+| `/api/entries` and `/api/entries/:id` | `/timesheet/api/entries` and `/timesheet/api/entries/:id` |
+| `/api/rates`, `/api/rates/:id`, and `/api/rates/applicable` | the same paths under `/timesheet` |
+| `/api/admin/pay` | `/timesheet/api/admin/pay` |
+| `/favicon.svg` | `/timesheet/favicon.svg` |
+
+Use 308 for the `/api` paths so a POST keeps its method and body. `/api/auth/login`, `/api/auth/logout`, and `/api/auth/password` were the old password API. They are gone. Leave them as 404. `/assets/*` from an old build will not match the new hashed filenames, so do not redirect those. `/` with no hash stays the launcher.
+
+To roll the path back, delete the `hbzr.us/timesheet*` route from this Worker. Leave the apex on the hub. Database rows are shared. Password hashes are still stored and are not used.
 
 ## Commands
 
@@ -129,5 +209,5 @@ To roll back, remove the custom domain from the Worker and point the DNS record 
 | `npm run cf:dev` | Production client build, then `wrangler dev` |
 | `npm run cf:deploy` | Production client build, then `wrangler deploy` |
 | `npx wrangler secret put DATABASE_URL` | Store the pooled Neon URL on the Worker |
-| `npx wrangler secret put AUTH_SECRET` | Store the session signing secret |
+| `npx wrangler secret put ACCESS_AUD` | Store the Access application AUD tag |
 | `npx wrangler secret list` | Show secret names (not values) |

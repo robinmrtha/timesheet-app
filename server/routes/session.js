@@ -1,101 +1,52 @@
-import {
-  assertIpAllowed,
-  assertNotLocked,
-  clearFailedLogins,
-  clearSessionCookie,
-  compareUnknownPassword,
-  currentUser,
-  findUserByEmail,
-  hashPassword,
-  issueSession,
-  passwordsMatch,
-  publicUser,
-  recordFailedLogin,
-  recordLoginAttempt,
-  requireUser,
-  sessionCookie,
-} from "../auth.js";
+import { findUserByEmail, publicUser, requireUser } from "../auth.js";
+import { resolveAccessIdentity } from "../access.js";
+import { NOT_SETUP_MESSAGE } from "../../shared/access.js";
+import { NO_ACCESS_MESSAGE, hasAnyAccess } from "../../shared/permissions.js";
+import { loadPermissions } from "../permissions.js";
 import { query } from "../db.js";
-import { clientIp, httpError, json, parseEmail, parseName, parsePassword, readJson } from "../http.js";
-
-export async function login(request) {
-  const body = await readJson(request);
-  const email = parseEmail(body.email);
-  const password = typeof body.password === "string" ? body.password : "";
-  if (!password) throw httpError(400, "Password is required");
-
-  const ip = clientIp(request);
-  await assertIpAllowed(ip);
-  await recordLoginAttempt(ip, email);
-
-  const user = await findUserByEmail(email);
-  if (!user) {
-    await compareUnknownPassword(password);
-    throw httpError(401, "Invalid email or password");
-  }
-
-  assertNotLocked(user);
-  const match = await passwordsMatch(password, user.password_hash);
-  if (!match) {
-    await recordFailedLogin(user.id);
-    throw httpError(401, "Invalid email or password");
-  }
-  if (!user.active) {
-    throw httpError(403, "This account is inactive. Ask an admin if you still need access.");
-  }
-
-  await clearFailedLogins(user.id);
-  const response = json({ user: publicUser(user) });
-  response.headers.append("set-cookie", sessionCookie(issueSession(user.id), request));
-  return response;
-}
-
-export async function logout(request) {
-  const response = json({ ok: true });
-  response.headers.append("set-cookie", clearSessionCookie(request));
-  return response;
-}
+import { httpError, json, parseName, readJson } from "../http.js";
 
 export async function session(request) {
-  const user = await currentUser(request);
-  if (!user || !user.active) {
-    const response = json({ user: null });
-    if (user && !user.active) {
-      response.headers.append("set-cookie", clearSessionCookie(request));
-    }
-    return response;
+  const identity = await resolveAccessIdentity(request);
+  if (!identity) return json({ user: null, reason: "unauthenticated" });
+  if (!identity.email) {
+    return json({ user: null, reason: "not_setup", message: NOT_SETUP_MESSAGE });
   }
-  return json({ user: publicUser(user) });
+  const user = await findUserByEmail(identity.email);
+  if (!user || !user.active) {
+    return json({
+      user: null,
+      reason: "not_setup",
+      email: identity.email,
+      message: NOT_SETUP_MESSAGE,
+    });
+  }
+  const permissions = await loadPermissions(user.email);
+  if (!hasAnyAccess(permissions)) {
+    return json({
+      user: null,
+      reason: "no_access",
+      email: identity.email,
+      message: NO_ACCESS_MESSAGE,
+    });
+  }
+  return json({ user: publicUser(user), permissions });
 }
 
-export async function changePassword(request) {
+async function requireMember(request) {
   const user = await requireUser(request);
-  const body = await readJson(request);
-  const currentPassword = typeof body.currentPassword === "string" ? body.currentPassword : "";
-  const nextPassword = parsePassword(body.newPassword, "New password");
-  if (!currentPassword) throw httpError(400, "Current password is required");
-  if (!(await passwordsMatch(currentPassword, user.password_hash))) {
-    throw httpError(400, "Current password is incorrect");
-  }
-  if (currentPassword === nextPassword) {
-    throw httpError(400, "Choose a password that is different from the current one");
-  }
-  const passwordHash = await hashPassword(nextPassword);
-  await query(
-    `UPDATE users SET password_hash = $1, updated_at = now(), failed_login_count = 0, locked_until = NULL
-     WHERE id = $2`,
-    [passwordHash, user.id],
-  );
-  return json({ ok: true });
+  const permissions = await loadPermissions(user.email);
+  if (!hasAnyAccess(permissions)) throw httpError(403, NO_ACCESS_MESSAGE);
+  return { user, permissions };
 }
 
 export async function getMe(request) {
-  const user = await requireUser(request);
-  return json({ user: publicUser(user) });
+  const { user, permissions } = await requireMember(request);
+  return json({ user: publicUser(user), permissions });
 }
 
 export async function patchMe(request) {
-  const user = await requireUser(request);
+  const { user } = await requireMember(request);
   const body = await readJson(request);
   if ("role" in body || "active" in body || "email" in body || "hourlyRate" in body) {
     throw httpError(403, "You can only update your own name");

@@ -4,7 +4,6 @@
  * ALLOW_DEMO_SEED=1 is set. Pass --reset to wipe and reload.
  */
 import { spawnSync } from "node:child_process";
-import bcrypt from "bcryptjs";
 import pg from "pg";
 
 pg.types.setTypeParser(1082, (value) => value);
@@ -33,10 +32,6 @@ const PEMBA = "22222222-2222-4222-8222-222222222222";
 const DOLMA = "33333333-3333-4333-8333-333333333333";
 const SAM = "44444444-4444-4444-8444-444444444444";
 
-async function hash2a(password) {
-  return (await bcrypt.hash(password, 10)).replace(/^\$2b\$/, "$2a$");
-}
-
 function psql(args) {
   const result = spawnSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", ...args], { encoding: "utf8" });
   if (result.status !== 0) throw new Error(result.stderr || result.stdout || "psql failed");
@@ -56,17 +51,17 @@ async function main() {
     }
     if (reset) await client.query(`TRUNCATE time_entries, employee_rates, login_attempts, users CASCADE`);
 
-    const passwords = {
-      [MIRA]: ["mira@example.com", "Mira Gurung", "admin", true, "Mira-Admin-2026"],
-      [PEMBA]: ["pemba@example.com", "Pemba Sherpa", "employee", true, "Pemba-Hours-2026"],
-      [DOLMA]: ["dolma@example.com", "Dolma Tamang", "employee", true, "Dolma-Hours-2026"],
-      [SAM]: ["sam.inactive@example.com", "Sam Inactive", "employee", false, "Sam-Inactive-2026"],
+    const people = {
+      [MIRA]: ["mira@example.com", "Mira Gurung", "admin", true],
+      [PEMBA]: ["pemba@example.com", "Pemba Sherpa", "employee", true],
+      [DOLMA]: ["dolma@example.com", "Dolma Tamang", "employee", true],
+      [SAM]: ["sam.inactive@example.com", "Sam Inactive", "employee", false],
     };
-    for (const [id, [email, name, role, active, password]] of Object.entries(passwords)) {
+    for (const [id, [email, name, role, active]] of Object.entries(people)) {
       await client.query(
         `INSERT INTO users (id, email, password_hash, name, role, active)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [id, email, await hash2a(password), name, role, active],
+         VALUES ($1, $2, 'not-used', $3, $4, $5)`,
+        [id, email, name, role, active],
       );
     }
     await client.query(
@@ -94,11 +89,11 @@ async function main() {
          ($4, '2026-09-12', 8, 'September shift', 'paid', 18, '2026-09-20T15:00:00Z', NULL, NULL)`,
       [PEMBA, MIRA, DOLMA, SAM],
     );
-    console.log("Demo users (local only):");
-    console.log("  mira@example.com / Mira-Admin-2026");
-    console.log("  pemba@example.com / Pemba-Hours-2026");
-    console.log("  dolma@example.com / Dolma-Hours-2026");
-    console.log("  sam.inactive@example.com / Sam-Inactive-2026 (inactive)");
+    console.log("Demo users (local only). Set ACCESS_DEV_EMAIL to one of these:");
+    console.log("  mira@example.com (admin)");
+    console.log("  pemba@example.com");
+    console.log("  dolma@example.com");
+    console.log("  sam.inactive@example.com (inactive)");
   } finally {
     await client.end();
   }

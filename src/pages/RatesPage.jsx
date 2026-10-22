@@ -3,7 +3,7 @@ import { Alert, EmptyState, Field, LoadingBlock, Modal, PageHeader } from "../co
 import { api, withQuery } from "../lib/api.js";
 import { formatDate, formatWhen, money, optionLabel } from "../lib/format.js";
 
-export function RatesPage() {
+export function RatesPage({ canEdit = false }) {
   const [users, setUsers] = useState([]);
   const [userId, setUserId] = useState("");
   const [rates, setRates] = useState([]);
@@ -110,6 +110,7 @@ export function RatesPage() {
             ))}
           </select>
         </Field>
+        {canEdit ? (
         <form className="form-row" onSubmit={addRate}>
           <Field label="Effective from">
             <input type="date" value={effectiveFrom} onChange={(event) => setEffectiveFrom(event.target.value)} required />
@@ -130,6 +131,9 @@ export function RatesPage() {
             {busy ? "Saving…" : "Add rate"}
           </button>
         </form>
+        ) : (
+          <p className="quiet">You can review rates. Changing them needs edit access.</p>
+        )}
         <Alert kind="success">{message}</Alert>
         <Alert>{error}</Alert>
       </section>
@@ -153,7 +157,7 @@ export function RatesPage() {
                   <th>Effective from</th>
                   <th>Hourly rate</th>
                   <th>Added</th>
-                  <th />
+                  {canEdit ? <th /> : null}
                 </tr>
               </thead>
               <tbody>
@@ -162,11 +166,13 @@ export function RatesPage() {
                     <td>{formatDate(rate.effectiveFrom)}</td>
                     <td className="num">{money(rate.hourlyRate)}</td>
                     <td>{formatWhen(rate.createdAt)}</td>
-                    <td>
-                      <button className="btn btn-danger btn-small" type="button" onClick={() => setRemoving(rate)}>
-                        Delete
-                      </button>
-                    </td>
+                    {canEdit ? (
+                      <td>
+                        <button className="btn btn-danger btn-small" type="button" onClick={() => setRemoving(rate)}>
+                          Delete
+                        </button>
+                      </td>
+                    ) : null}
                   </tr>
                 ))}
               </tbody>

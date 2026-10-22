@@ -160,9 +160,18 @@ export function blankToNull(value, max, label) {
   return trimmed;
 }
 
+export const APP_BASE = "/timesheet";
+
+export function stripAppBase(pathname) {
+  if (pathname === APP_BASE || pathname === `${APP_BASE}/`) return "/";
+  if (pathname.startsWith(`${APP_BASE}/`)) return pathname.slice(APP_BASE.length);
+  return pathname;
+}
+
 export function normalizePath(pathname) {
-  if (pathname.length > 1 && pathname.endsWith("/")) return pathname.slice(0, -1);
-  return pathname || "/";
+  const stripped = stripAppBase(pathname);
+  if (stripped.length > 1 && stripped.endsWith("/")) return stripped.slice(0, -1);
+  return stripped || "/";
 }
 
 // Vercel serves every /api/* request from one function via a rewrite. Depending

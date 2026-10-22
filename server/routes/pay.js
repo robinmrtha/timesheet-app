@@ -1,9 +1,10 @@
-import { requireAdmin } from "../auth.js";
 import { query } from "../db.js";
+import { assertCan, requireActor } from "../permissions.js";
 import { blankToNull, httpError, json, optionalDate, readJson, requireUuid } from "../http.js";
 
 export async function markPaid(request) {
-  const admin = await requireAdmin(request);
+  const { user: admin, permissions } = await requireActor(request);
+  assertCan(permissions, "timesheet.payroll", "edit");
   const body = await readJson(request);
   const userId = requireUuid(body.userId, "User id");
   const from = optionalDate(body.from, "From");

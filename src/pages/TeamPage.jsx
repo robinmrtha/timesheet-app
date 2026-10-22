@@ -3,9 +3,9 @@ import { ActiveBadge, Alert, Field, LoadingBlock, PageHeader } from "../componen
 import { api } from "../lib/api.js";
 import { initials, personName } from "../lib/format.js";
 
-const EMPTY_FORM = { name: "", email: "", password: "", role: "employee" };
+const EMPTY_FORM = { name: "", email: "", role: "employee" };
 
-export function TeamPage({ currentUserId }) {
+export function TeamPage({ currentUserId, canEdit = false }) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -49,7 +49,7 @@ export function TeamPage({ currentUserId }) {
     try {
       await api("/api/users", { method: "POST", body: form });
       setForm(EMPTY_FORM);
-      setMessage("Employee created. Share the password with them directly.");
+      setMessage("Employee added. They can open Timesheet after signing in with this email.");
       await load();
     } catch (err) {
       setError(err.message);
@@ -63,11 +63,12 @@ export function TeamPage({ currentUserId }) {
       <PageHeader
         eyebrow="Admin"
         title="Team"
-        lede="Create sign-ins, reset a password, or mark someone inactive. Inactive people cannot sign in, and their hours stay in reports."
+        lede="Add someone by the email they use with Cloudflare Access, or mark them inactive. Inactive people cannot open Timesheet, and their hours stay in reports."
       />
       <Alert kind="success">{message}</Alert>
       <Alert>{error}</Alert>
 
+      {canEdit ? (
       <section className="card">
         <h2>New employee</h2>
         <form className="stack" onSubmit={createUser}>
@@ -79,7 +80,7 @@ export function TeamPage({ currentUserId }) {
                 required
               />
             </Field>
-            <Field label="Email">
+            <Field label="Email" hint="The Cloudflare Access email">
               <input
                 type="email"
                 autoComplete="off"
@@ -90,16 +91,6 @@ export function TeamPage({ currentUserId }) {
             </Field>
           </div>
           <div className="split">
-            <Field label="Temporary password" hint="At least 8 characters">
-              <input
-                type="text"
-                autoComplete="new-password"
-                value={form.password}
-                onChange={(event) => setForm({ ...form, password: event.target.value })}
-                required
-                minLength={8}
-              />
-            </Field>
             <Field label="Role">
               <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}>
                 <option value="employee">Employee</option>
@@ -112,6 +103,9 @@ export function TeamPage({ currentUserId }) {
           </button>
         </form>
       </section>
+      ) : (
+        <p className="quiet">You can review the team. Adding or changing people needs edit access.</p>
+      )}
 
       <section className="stack">
         {loading ? <LoadingBlock label="Loading team…" /> : null}
@@ -120,6 +114,7 @@ export function TeamPage({ currentUserId }) {
             key={person.id}
             person={person}
             isSelf={person.id === currentUserId}
+            canEdit={canEdit}
             onChanged={async (text) => {
               setMessage(text);
               await load();
@@ -132,12 +127,11 @@ export function TeamPage({ currentUserId }) {
   );
 }
 
-function PersonCard({ person, isSelf, onChanged, onError }) {
+function PersonCard({ person, isSelf, canEdit, onChanged, onError }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(person.name || "");
   const [email, setEmail] = useState(person.email);
   const [role, setRole] = useState(person.role);
-  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -160,23 +154,9 @@ function PersonCard({ person, isSelf, onChanged, onError }) {
     }
   }
 
-  async function savePassword(event) {
-    event.preventDefault();
-    setBusy(true);
-    try {
-      await api(`/api/users/${person.id}/password`, { method: "POST", body: { password } });
-      setPassword("");
-      await onChanged("Password updated. Share it with them directly.");
-    } catch (err) {
-      onError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function toggleActive() {
     const next = !person.active;
-    if (!next && !window.confirm(`${personName(person)} will not be able to sign in. Their hours stay visible.`)) {
+    if (!next && !window.confirm(`${personName(person)} will not be able to open Timesheet. Their hours stay visible.`)) {
       return;
     }
     setBusy(true);
@@ -205,6 +185,7 @@ function PersonCard({ person, isSelf, onChanged, onError }) {
           <ActiveBadge active={person.active} />
         </div>
       </div>
+      {canEdit ? (
       <div className="row-actions">
         <button className="btn btn-quiet btn-small" type="button" onClick={() => setOpen((value) => !value)}>
           {open ? "Close" : "Edit"}
@@ -214,13 +195,14 @@ function PersonCard({ person, isSelf, onChanged, onError }) {
         </button>
         {isSelf ? <span className="quiet">This is you</span> : null}
       </div>
-      {open ? (
+      ) : null}
+      {canEdit && open ? (
         <div className="stack person-edit">
           <form className="split" onSubmit={saveProfile}>
             <Field label="Name">
               <input value={name} onChange={(event) => setName(event.target.value)} required />
             </Field>
-            <Field label="Email">
+            <Field label="Email" hint="Must match the Cloudflare Access email">
               <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
             </Field>
             <Field label="Role">
@@ -231,21 +213,6 @@ function PersonCard({ person, isSelf, onChanged, onError }) {
             </Field>
             <button className="btn btn-primary" type="submit" disabled={busy}>
               Save profile
-            </button>
-          </form>
-          <form className="split" onSubmit={savePassword}>
-            <Field label="New password" hint="Replaces their current password">
-              <input
-                type="text"
-                autoComplete="new-password"
-                minLength={8}
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                required
-              />
-            </Field>
-            <button className="btn btn-quiet" type="submit" disabled={busy}>
-              Set password
             </button>
           </form>
         </div>
