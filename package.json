@@ -7,10 +7,15 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node scripts/test-api.mjs",
+    "migrate": "node scripts/migrate-from-supabase.mjs",
+    "seed:demo": "node scripts/seed-demo.mjs"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.90.0",
+    "@vercel/functions": "^3.10.2",
+    "bcryptjs": "^3.0.3",
+    "pg": "^8.23.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
