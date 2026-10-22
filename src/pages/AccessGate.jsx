@@ -45,6 +45,9 @@ export function AccessGate({ reason, email }) {
             </button>
           </>
         )}
+        <a className="btn btn-quiet btn-block" href="/">
+          Home
+        </a>
         <button className="btn btn-quiet btn-block" type="button" onClick={logOut}>
           Log out
         </button>

@@ -11,9 +11,11 @@ import {
 
 export { allows, hasAnyAccess };
 
-// Hub service binding. The URL is what HUB.fetch is given; the binding does
-// not use the public internet or a shared secret.
-export const HUB_PERMISSIONS_URL = "https://hbzr.us/internal/permissions";
+// Service binding to hbzr-app's Hub entrypoint. The host is the binding's
+// internal name, not a public origin, and there is no shared secret.
+// createHubPermissionsSource is the fetch adapter. An RPC method on the same
+// entrypoint can replace it later: (email) => hub.getPermissions(email).
+export const HUB_PERMISSIONS_URL = "https://hub/internal/permissions";
 const CACHE_MS = 30 * 1000;
 const MAX_BODY_CHARS = 20_000;
 const LEVELS = new Set(["none", "view", "edit"]);
@@ -59,8 +61,8 @@ export function normalizePermissions(body, expectedEmail) {
   return { email, active: true, isOwner, sections };
 }
 
-export function permissionsRequest(email) {
-  return new Request(`${HUB_PERMISSIONS_URL}?email=${encodeURIComponent(email)}`);
+export function permissionsUrl(email) {
+  return `${HUB_PERMISSIONS_URL}?email=${encodeURIComponent(email)}`;
 }
 
 export function createHubPermissionsSource(hub) {
@@ -70,10 +72,10 @@ export function createHubPermissionsSource(hub) {
       error.status = "missing-hub";
       throw error;
     }
-    const request = permissionsRequest(email);
+    const url = permissionsUrl(email);
     let response;
     try {
-      response = await hub.fetch(request);
+      response = await hub.fetch(url);
     } catch {
       const error = new Error("network");
       error.status = "network";

@@ -2,7 +2,7 @@
 
 Employees sign in and log hours. Admins review totals, set hourly rates, mark a date range paid, and manage accounts.
 
-The app runs on Cloudflare Workers and Neon Postgres. See [DEPLOY-CLOUDFLARE.md](DEPLOY-CLOUDFLARE.md). The browser talks only to `/api`. Sign-in is Cloudflare Access (Google or an email code) on `hbzr.cloudflareaccess.com`. The Worker checks the Access JWT and maps its email to a row in `users`. There is no Timesheet password. Old password hashes stay in the database and are not checked.
+The app runs on Cloudflare Workers and Neon Postgres. See [DEPLOY-CLOUDFLARE.md](DEPLOY-CLOUDFLARE.md). The browser talks only to `/timesheet/api`. Sign-in is Cloudflare Access (Google or an email code) on `hbzr.cloudflareaccess.com`. The Worker checks the Access JWT and maps its email to a row in `users`. There is no Timesheet password. Old password hashes stay in the database and are not checked.
 
 ## Environment variables
 
@@ -72,7 +72,7 @@ Open `http://127.0.0.1:5173/timesheet/`. The apex of that dev server redirects t
 
 ## Access rules
 
-The API calls the hub (`env.HUB`, service `hbzr-app`, entrypoint `Hub`) at `https://hbzr.us/internal/permissions?email=…` for `none`, `view`, or `edit` on `timesheet.own`, `timesheet.team`, `timesheet.payroll`, and `timesheet.admin`. Owners get edit on all four even when `active` is false. Anyone else with `active: false` is refused. A missing section, a bad response, or an error is no access. The browser hides tabs and disables edits to match; the API is the check. The public route is `hbzr.us/timesheet*` only.
+The API calls the hub binding with `env.HUB.fetch("https://hub/internal/permissions?email=…")` for `none`, `view`, or `edit` on `timesheet.own`, `timesheet.team`, `timesheet.payroll`, and `timesheet.admin`. Owners get edit on all four even when `active` is false. Anyone else with `active: false` is refused. A missing section, a bad response, or an error is no access. The browser hides tabs and disables edits to match; the API is the check. The public route is `hbzr.us/timesheet*` only. Home in the header goes to `/`, the hub launcher. Old root bookmarks are listed in [DEPLOY-CLOUDFLARE.md](DEPLOY-CLOUDFLARE.md) for the hub to redirect. `/` itself stays the launcher.
 
 With `PERMISSIONS_ROLE_FALLBACK=1` (local only, off in production), an active admin has edit on every section and anyone else has edit on their own hours:
 

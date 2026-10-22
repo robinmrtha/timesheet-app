@@ -74,6 +74,9 @@ export function Layout({ user, permissions, page, onNavigate, onLogout, children
               <strong>{display}</strong>
               <span className={`role-chip ${label === "Employee" ? "" : "role-admin"}`}>{label}</span>
             </div>
+            <a className="btn btn-quiet" href="/">
+              Home
+            </a>
             <button className="btn btn-quiet" type="button" onClick={onLogout}>
               Log out
             </button>

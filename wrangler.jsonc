@@ -7,6 +7,8 @@
   "upload_source_maps": true,
   // The apex hbzr.us belongs to hbzr-app. This Worker is only hbzr.us/timesheet*.
   // Do not add a custom domain or a route for the apex or www.
+  // wrangler.jsonc is the file Wrangler reads (it prefers this over wrangler.toml).
+  // The route is: [[routes]] pattern = "hbzr.us/timesheet*"  zone_name = "hbzr.us"
   "routes": [
     { "pattern": "hbzr.us/timesheet*", "zone_name": "hbzr.us" }
   ],
@@ -21,7 +23,7 @@
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
-    "not_found_handling": "single-page-application",
+    "not_found_handling": "none",
     "run_worker_first": true
   },
   // Names only. Values are `wrangler secret put` (production) or .dev.vars (local).

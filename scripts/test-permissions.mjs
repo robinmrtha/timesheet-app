@@ -19,6 +19,10 @@ function check(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function calledUrl(input) {
+  return typeof input === "string" ? input : input.url;
+}
+
 function sections(overrides = {}) {
   return {
     "timesheet.own": "none",
@@ -80,8 +84,8 @@ async function hubSourceTests() {
   const source = createHubPermissionsSource({
     fetch: async (request) => {
       calls += 1;
-      check(request.url === "https://hbzr.us/internal/permissions?email=mira%40example.com", "hub permissions URL");
-      check(request.headers.get("authorization") == null, "hub call does not send a shared secret");
+      check(calledUrl(request) === "https://hub/internal/permissions?email=mira%40example.com", "hub permissions URL");
+      check(typeof request === "string", "hub fetch is called with the internal URL");
       return Response.json(record("mira@example.com", { "timesheet.payroll": "edit" }));
     },
   });
@@ -93,12 +97,12 @@ async function hubSourceTests() {
   const encoded = [];
   const plus = createHubPermissionsSource({
     fetch: async (request) => {
-      encoded.push(request.url);
+      encoded.push(calledUrl(request));
       return Response.json(record("a+b@example.com", { "timesheet.own": "view" }));
     },
   });
   await plus("a+b@example.com");
-  check(encoded[0] === "https://hbzr.us/internal/permissions?email=a%2Bb%40example.com", "email is encodeURIComponent");
+  check(encoded[0] === "https://hub/internal/permissions?email=a%2Bb%40example.com", "email is encodeURIComponent");
 
   const missing = createHubPermissionsSource(null);
   let threw = false;
@@ -141,9 +145,9 @@ async function cacheTests() {
   const hub = {
     fetch(request) {
       calls += 1;
-      const email = new URL(request.url).searchParams.get("email");
-      check(request.url === `https://hbzr.us/internal/permissions?email=${encodeURIComponent(email)}`, "cached loader uses the hub");
-      check(request.headers.get("authorization") == null, "cached loader sends no token");
+      const email = new URL(calledUrl(request)).searchParams.get("email");
+      check(calledUrl(request) === `https://hub/internal/permissions?email=${encodeURIComponent(email)}`, "cached loader uses the hub");
+      check(typeof request === "string", "cached loader sends the URL string");
       if (mode === "down") return new Response("down", { status: 500 });
       if (mode === "none") return Response.json(record(email));
       return Response.json(record(email, { "timesheet.own": "edit" }));
@@ -225,11 +229,11 @@ async function routeTests() {
   const hub = {
     fetch(request) {
       calls += 1;
-      const parsed = new URL(request.url);
+      const parsed = new URL(calledUrl(request));
       const email = parsed.searchParams.get("email");
       check(email, "route lookup sends an email");
-      check(request.url === `https://hbzr.us/internal/permissions?email=${encodeURIComponent(email)}`, "route lookup uses the hub url");
-      check(request.headers.get("authorization") == null, "route lookup sends no token");
+      check(calledUrl(request) === `https://hub/internal/permissions?email=${encodeURIComponent(email)}`, "route lookup uses the hub url");
+      check(typeof request === "string", "route lookup calls fetch with the URL string");
       const payload = bodyFor(email);
       if (payload === "down") return new Response("down", { status: 500 });
       if (payload === "missing") return new Response(JSON.stringify({ error: "nope" }), { status: 404 });
@@ -422,13 +426,18 @@ async function routeTests() {
     check(prefixed.status === 200 && prefixed.data.reason === "no_access", "the /timesheet prefix still reaches the API");
 
     const { default: worker } = await import("../worker/index.js");
+    const { readFileSync } = await import("node:fs");
+    const manifest = JSON.parse(readFileSync("public/manifest.webmanifest", "utf8"));
+    check(manifest.start_url === "/timesheet/" && manifest.scope === "/timesheet/", "manifest is scoped to /timesheet/");
     let assetPath = "";
     const env = {
       HUB: hub,
       ASSETS: {
         async fetch(assetRequest) {
           assetPath = new URL(assetRequest.url).pathname;
-          return new Response(assetPath, { headers: { "content-type": "text/plain" } });
+          if (assetPath === "/index.html") return new Response("index", { headers: { "content-type": "text/html" } });
+          if (assetPath === "/assets/app.js") return new Response(assetPath, { headers: { "content-type": "text/javascript" } });
+          return new Response("missing", { status: 404 });
         },
       },
     };
@@ -436,10 +445,18 @@ async function routeTests() {
     check(apex.status === 404, "the apex is not served by this worker");
     const apexApi = await worker.fetch(new Request("https://hbzr.us/api/auth/session"), env);
     check(apexApi.status === 404, "apex /api is not served by this worker");
+    const rootApi = await worker.fetch(new Request("http://localhost/api/auth/session"), env);
+    check(rootApi.status === 404, "bare /api is outside /timesheet");
     const www = await worker.fetch(new Request("https://www.hbzr.us/timesheet"), env);
     check(www.status === 404, "www is not a route for this worker");
     const asset = await worker.fetch(new Request("https://hbzr.us/timesheet/assets/app.js"), env);
     check(asset.status === 200 && (await asset.text()) === "/assets/app.js", "timesheet asset paths drop the /timesheet prefix");
+    const missingAsset = await worker.fetch(new Request("https://hbzr.us/timesheet/assets/missing.js"), env);
+    check(missingAsset.status === 404, "a missing file under /timesheet/assets is not the SPA");
+    const spa = await worker.fetch(new Request("https://hbzr.us/timesheet/pay"), env);
+    check(spa.status === 200 && (await spa.text()) === "index", "unknown /timesheet paths fall back to the SPA");
+    const home = await worker.fetch(new Request("https://hbzr.us/timesheet"), env);
+    check(home.status === 200 && (await home.text()) === "index", "/timesheet serves the SPA");
 
     resetPermissionsCache();
     bodyFor = (email) => record(email, { "timesheet.own": "edit", "timesheet.admin": "edit" });
@@ -453,7 +470,6 @@ async function routeTests() {
     const mountedData = await mounted.json();
     check(mounted.status === 200 && mountedData.user.email === "admin@example.com", "localhost /timesheet/api uses the hub binding");
     check(calls === callsBeforeWorker + 1, "the worker calls env.HUB.fetch once");
-    check(assetPath === "/assets/app.js", "asset rewrite kept the file path");
   } finally {
     delete process.env.ACCESS_DEV_BYPASS;
     delete process.env.PERMISSIONS_ROLE_FALLBACK;

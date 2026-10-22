@@ -12,7 +12,7 @@ export function apiDevPlugin() {
         }
         if (url === "/timesheet/api" || url.startsWith("/timesheet/api/") || url.startsWith("/timesheet/api?")) {
           req.url = url.slice("/timesheet".length);
-        } else if (!url.startsWith("/api")) {
+        } else {
           return next();
         }
         try {

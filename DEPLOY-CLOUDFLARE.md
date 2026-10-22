@@ -5,7 +5,7 @@ Vercel stays the production target until you cut DNS over. Both targets build fr
 | | Vercel (current) | Cloudflare Workers |
 | --- | --- | --- |
 | App | Vite build, `vercel.json` SPA rewrite | Vite build, Workers static assets, SPA fallback |
-| API | `api/index.js` rewrites `/api/*` to `server/router.js` | `worker/index.js` sends `/api` and `/api/*` to the same router |
+| API | `api/index.js` rewrites `/api/*` to `server/router.js` | `worker/index.js` sends `/timesheet/api/*` to the same router |
 | Database | `pg` + `@vercel/functions` `attachDatabasePool` | `@neondatabase/serverless` HTTP, except localhost (see below) |
 | Secrets | Vercel project env | `wrangler secret put` (`DATABASE_URL`, `ACCESS_AUD`) |
 
@@ -77,7 +77,7 @@ service = "hbzr-app"
 entrypoint = "Hub"
 ```
 
-The call is `env.HUB.fetch(new Request("https://hbzr.us/internal/permissions?email=" + encodeURIComponent(email)))`. There is no `PERMISSIONS_API_TOKEN` and no `Authorization` header. The email is the one from the Access JWT, not a value from the browser.
+The call is `env.HUB.fetch("https://hub/internal/permissions?email=" + encodeURIComponent(email))`. `hub` is the service binding, not a public hostname. There is no `PERMISSIONS_API_TOKEN` and no `Authorization` header. The email is the one from the verified Access JWT, not a value from the browser. `createHubPermissionsSource` is the adapter. If `Hub` later exposes an RPC method, that function is the piece to replace.
 
 Sections:
 
@@ -162,9 +162,45 @@ The route in `wrangler.jsonc` is:
 ]
 ```
 
-That pattern is the whole public surface. Requests to `https://hbzr.us/timesheet` and `https://hbzr.us/timesheet/api/…` hit this Worker. The Worker strips the `/timesheet` prefix before it serves the API or the static files, so the client is built with Vite `base` `/timesheet/`. A request for the apex, if it ever reached this Worker, is a 404.
+The same route in toml, which is what Wrangler would read only if `wrangler.jsonc` were not present (`wrangler.jsonc` wins when both exist):
 
-To roll the path back, delete that route from the Worker. Leave the apex DNS on the hub. Database rows are shared. Password hashes are still stored and are not used.
+```toml
+[[routes]]
+pattern = "hbzr.us/timesheet*"
+zone_name = "hbzr.us"
+```
+
+There is no `routes` entry for `hbzr.us`, `hbzr.us/*`, or `www.hbzr.us`. Do not add one.
+
+That pattern is the whole public surface. `https://hbzr.us/timesheet` and `https://hbzr.us/timesheet/api/…` hit this Worker. Anything else, including `/` and `/api/…`, is a 404 if it reaches this Worker. The client is built with Vite `base` `/timesheet/`. The PWA manifest `start_url` and `scope` are `/timesheet/`. Unknown paths under `/timesheet/` (not `/timesheet/api` and not a real file) fall back to the SPA. A missing file under `/timesheet/assets/` stays a 404. The header has a Home link to `/`, which is the hub launcher.
+
+`npm run dev` redirects `http://127.0.0.1:5173/` to `/timesheet/` because the hub is not running there. That redirect is not what production `/` does.
+
+## Legacy paths the hub should redirect
+
+`hbzr-app` owns `https://hbzr.us/`. Do not send `/` to Timesheet. Old bookmarks from when Timesheet lived at the root should land on `/timesheet/`. The hash is not sent to the Worker, so the launcher page has to read it in the browser.
+
+Redirect these, keeping the query string:
+
+| Legacy path | Destination |
+| --- | --- |
+| `/#/` | `/timesheet/` |
+| `/#/add` | `/timesheet/#/add` |
+| `/#/pay` | `/timesheet/#/pay` |
+| `/#/rates` | `/timesheet/#/rates` |
+| `/#/team` | `/timesheet/#/team` |
+| `/#/account` | `/timesheet/#/account` |
+| `/api/auth/session` | `/timesheet/api/auth/session` |
+| `/api/me` | `/timesheet/api/me` |
+| `/api/users` and `/api/users/:id` | `/timesheet/api/users` and `/timesheet/api/users/:id` |
+| `/api/entries` and `/api/entries/:id` | `/timesheet/api/entries` and `/timesheet/api/entries/:id` |
+| `/api/rates`, `/api/rates/:id`, and `/api/rates/applicable` | the same paths under `/timesheet` |
+| `/api/admin/pay` | `/timesheet/api/admin/pay` |
+| `/favicon.svg` | `/timesheet/favicon.svg` |
+
+Use 308 for the `/api` paths so a POST keeps its method and body. `/api/auth/login`, `/api/auth/logout`, and `/api/auth/password` were the old password API. They are gone. Leave them as 404. `/assets/*` from an old build will not match the new hashed filenames, so do not redirect those. `/` with no hash stays the launcher.
+
+To roll the path back, delete the `hbzr.us/timesheet*` route from this Worker. Leave the apex on the hub. Database rows are shared. Password hashes are still stored and are not used.
 
 ## Commands
 
