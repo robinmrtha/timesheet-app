@@ -4,6 +4,11 @@
 -- Apply with a DIRECT (non-pooled) connection on an empty database:
 --   psql "$DATABASE_URL_UNPOOLED" -v ON_ERROR_STOP=1 -f db/schema.sql
 --
+-- pgcrypto lets the Cloudflare Worker verify cost-10 bcrypt inside Postgres
+-- (see DEPLOY-CLOUDFLARE.md). CREATE EXTENSION needs the direct connection.
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- ledger_summary (unused Amazon FBA ledger) is intentionally not created.
 -- Multiple time_entries per user per work_date are allowed (split shifts).
 -- profiles.hourly_rate was unused; rates live in employee_rates and are
@@ -31,7 +36,7 @@ CREATE TABLE IF NOT EXISTS users (
 COMMENT ON TABLE users IS 'Replaces Supabase auth.users and public.profiles. Same UUIDs. password_hash is bcrypt.';
 COMMENT ON COLUMN users.hourly_rate IS 'Copied from profiles. Unused for pay; see employee_rates.';
 COMMENT ON COLUMN users.active IS 'Inactive users cannot sign in. Admins still see their history.';
-COMMENT ON COLUMN users.password_hash IS 'bcrypt hash. Imported Supabase hashes use the $2a$ prefix.';
+COMMENT ON COLUMN users.password_hash IS 'bcrypt hash, cost 10. Imported Supabase hashes use the $2a$ prefix. bcryptjs may store $2b$. Workers verify both with pgcrypto crypt().';
 
 CREATE TABLE IF NOT EXISTS time_entries (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

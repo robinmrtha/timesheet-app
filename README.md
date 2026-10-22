@@ -2,7 +2,7 @@
 
 Employees sign in and log hours. Admins review totals, set hourly rates, mark a date range paid, and manage accounts.
 
-The app runs on Vercel (Hobby) and Neon Postgres. The browser talks only to `/api`. Passwords are bcrypt, including the `$2a$` hashes exported from Supabase, and the session is an HttpOnly cookie.
+The app runs on Vercel (Hobby) and Neon Postgres. The same code can also run on Cloudflare Workers without taking Vercel down; see [DEPLOY-CLOUDFLARE.md](DEPLOY-CLOUDFLARE.md). The browser talks only to `/api`. Passwords stay cost-10 bcrypt, including the `$2a$` hashes exported from Supabase. Vercel checks them with bcryptjs. Workers check them with Postgres `pgcrypto` so the free-plan CPU limit is not spent inside bcryptjs. The session is an HttpOnly cookie.
 
 ## Environment variables
 
@@ -65,7 +65,7 @@ npm run dev
 - `dolma@example.com` / `Dolma-Hours-2026`
 - `sam.inactive@example.com` / `Sam-Inactive-2026` (inactive; history remains)
 
-`npm test` builds nothing; it resets two local databases (`timesheet_test` and `timesheet_source`), runs the migration, and checks the API as both an admin and an employee. `npm run build` produces the static client.
+`npm test` builds nothing. It checks password verification, client IP selection, and which database driver each runtime uses against `timesheet_cf`, then resets `timesheet_test` and `timesheet_source`, runs the migration, and checks the API as both an admin and an employee. `npm run build` produces the static client. `npm run cf:dev` and `npm run cf:deploy` are the Workers commands; see [DEPLOY-CLOUDFLARE.md](DEPLOY-CLOUDFLARE.md).
 
 ## Access rules
 

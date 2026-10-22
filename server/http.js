@@ -57,6 +57,14 @@ function normalizeIp(value) {
 }
 
 export function clientIp(request) {
+  // Cloudflare sets cf-connecting-ip and overwrites any client-supplied value.
+  // request.cf is only present in the Workers runtime, so a browser hitting
+  // Vercel cannot spoof it to skip the IP rate limit. Vercel keeps using
+  // x-forwarded-for, which the platform sets.
+  if (request.cf) {
+    const cfIp = request.headers.get("cf-connecting-ip");
+    if (cfIp) return normalizeIp(cfIp);
+  }
   const forwarded = request.headers.get("x-forwarded-for");
   if (forwarded) return normalizeIp(forwarded.split(",")[0]);
   const realIp = request.headers.get("x-real-ip");
