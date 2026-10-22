@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { ACCESS_LOGOUT_URL, NOT_SETUP_MESSAGE } from "../../shared/access.js";
+import { NO_ACCESS_MESSAGE } from "../../shared/permissions.js";
 
 function logOut() {
   window.location.assign(ACCESS_LOGOUT_URL);
@@ -7,12 +8,15 @@ function logOut() {
 
 export function AccessGate({ reason, email }) {
   const notSetup = reason === "not_setup";
+  const noAccess = reason === "no_access";
 
   useEffect(() => {
     document.title = notSetup
       ? "Account not set up · Himalayan Bazaar"
-      : "Sign in · Himalayan Bazaar";
-  }, [notSetup]);
+      : noAccess
+        ? "Access needed · Himalayan Bazaar"
+        : "Sign in · Himalayan Bazaar";
+  }, [notSetup, noAccess]);
 
   return (
     <div className="login-screen">
@@ -23,6 +27,12 @@ export function AccessGate({ reason, email }) {
             <h1>{NOT_SETUP_MESSAGE}</h1>
             {email ? <p className="quiet">Signed in as {email}</p> : null}
             <p className="lede">Timesheet does not have its own password. Robin adds people by the email they use for Cloudflare Access.</p>
+          </>
+        ) : noAccess ? (
+          <>
+            <h1>{NO_ACCESS_MESSAGE}</h1>
+            {email ? <p className="quiet">Signed in as {email}</p> : null}
+            <p className="lede">Your Timesheet account is here, but no section is open for you yet.</p>
           </>
         ) : (
           <>

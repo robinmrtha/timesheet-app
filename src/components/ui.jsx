@@ -68,7 +68,7 @@ export function StatCard({ label, value, money, detail, tone }) {
     <article className={`stat stat-${tone}`}>
       <p className="stat-label">{label}</p>
       <p className="stat-value">{value}</p>
-      <p className="stat-money">{money}</p>
+      {money ? <p className="stat-money">{money}</p> : null}
       <p className="stat-detail">{detail}</p>
     </article>
   );

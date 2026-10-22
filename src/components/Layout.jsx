@@ -1,13 +1,27 @@
+import { allows } from "../../shared/permissions.js";
 import { LoadingBlock } from "./ui.jsx";
 
 const NAV = [
-  { id: "dashboard", label: "Overview", admin: false },
-  { id: "add", label: "Add hours", admin: false },
-  { id: "pay", label: "Pay", admin: true },
-  { id: "rates", label: "Rates", admin: true },
-  { id: "team", label: "Team", admin: true },
-  { id: "account", label: "Account", admin: false },
+  {
+    id: "dashboard",
+    label: "Overview",
+    visible: (permissions) =>
+      allows(permissions, "timesheet.own", "view") ||
+      allows(permissions, "timesheet.team", "view") ||
+      allows(permissions, "timesheet.payroll", "view"),
+  },
+  { id: "add", label: "Add hours", visible: (permissions) => allows(permissions, "timesheet.own", "edit") },
+  { id: "pay", label: "Pay", visible: (permissions) => allows(permissions, "timesheet.payroll", "view") },
+  { id: "rates", label: "Rates", visible: (permissions) => allows(permissions, "timesheet.payroll", "view") },
+  { id: "team", label: "Team", visible: (permissions) => allows(permissions, "timesheet.admin", "view") },
+  { id: "account", label: "Account", visible: () => true },
 ];
+
+function accessLabel(permissions) {
+  if (permissions?.isOwner) return "Owner";
+  if (allows(permissions, "timesheet.admin", "view")) return "Admin";
+  return "Employee";
+}
 
 function Mark() {
   return (
@@ -39,9 +53,9 @@ export function LoadingScreen({ message, error, onRetry }) {
   );
 }
 
-export function Layout({ user, page, onNavigate, onLogout, children }) {
-  const isAdmin = user.role === "admin";
-  const items = NAV.filter((item) => !item.admin || isAdmin);
+export function Layout({ user, permissions, page, onNavigate, onLogout, children }) {
+  const label = accessLabel(permissions);
+  const items = NAV.filter((item) => item.visible(permissions));
   const display = user.name?.trim() || user.email;
 
   return (
@@ -58,9 +72,7 @@ export function Layout({ user, page, onNavigate, onLogout, children }) {
           <div className="session">
             <div className="who">
               <strong>{display}</strong>
-              <span className={`role-chip ${isAdmin ? "role-admin" : ""}`}>
-                {isAdmin ? "Admin" : "Employee"}
-              </span>
+              <span className={`role-chip ${label === "Employee" ? "" : "role-admin"}`}>{label}</span>
             </div>
             <button className="btn btn-quiet" type="button" onClick={onLogout}>
               Log out

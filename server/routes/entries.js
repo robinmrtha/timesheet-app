@@ -1,5 +1,5 @@
-import { requireAdmin, requireUser } from "../auth.js";
 import { query } from "../db.js";
+import { allows, assertCan, requireActor } from "../permissions.js";
 import {
   blankToNull,
   httpError,
@@ -11,7 +11,7 @@ import {
   requireUuid,
 } from "../http.js";
 
-function entryJson(row) {
+function entryJson(row, includeMoney) {
   return {
     id: row.id,
     userId: row.user_id,
@@ -26,7 +26,7 @@ function entryJson(row) {
     paidBy: row.paid_by,
     paidReference: row.paid_reference,
     createdAt: row.created_at,
-    hourlyRate: row.hourly_rate == null ? 0 : Number(row.hourly_rate),
+    hourlyRate: includeMoney ? (row.hourly_rate == null ? 0 : Number(row.hourly_rate)) : null,
     employeeName: row.employee_name || "",
     employeeEmail: row.employee_email || "",
     employeeActive: row.employee_active !== false,
@@ -59,14 +59,21 @@ async function loadEntry(id) {
   return rows[0] || null;
 }
 
+function canSeeOthers(permissions) {
+  return allows(permissions, "timesheet.team", "view") || allows(permissions, "timesheet.payroll", "view");
+}
+
 export async function listEntries(request, url) {
-  const user = await requireUser(request);
-  const isAdmin = user.role === "admin";
+  const { user, permissions } = await requireActor(request);
+  const seeOthers = canSeeOthers(permissions);
+  const seeOwn = allows(permissions, "timesheet.own", "view");
+  if (!seeOthers && !seeOwn) throw httpError(403, "You do not have access to that");
   let userId = null;
-  if (isAdmin) {
-    const requested = url.searchParams.get("userId");
+  const requested = url.searchParams.get("userId");
+  if (seeOthers) {
     if (requested) userId = requireUuid(requested, "User id");
   } else {
+    if (requested && requested !== user.id) throw httpError(403, "You do not have access to that");
     userId = user.id;
   }
   const from = optionalDate(url.searchParams.get("from"), "From");
@@ -90,11 +97,15 @@ export async function listEntries(request, url) {
      ORDER BY e.work_date DESC, e.created_at DESC`,
     [userId, from, to, status],
   );
-  return json({ entries: rows.map(entryJson) });
+  const seePayroll = allows(permissions, "timesheet.payroll", "view");
+  return json({
+    entries: rows.map((row) => entryJson(row, seePayroll || row.user_id === user.id)),
+  });
 }
 
 export async function createEntry(request) {
-  const user = await requireUser(request);
+  const { user, permissions } = await requireActor(request);
+  assertCan(permissions, "timesheet.own", "edit");
   const body = await readJson(request);
   const workDate = parseDate(body.workDate, "Work date");
   const hours = parseHours(body.hours);
@@ -107,18 +118,22 @@ export async function createEntry(request) {
     [user.id, workDate, hours, notes, hourlyRate],
   );
   const entry = await loadEntry(rows[0].id);
-  return json({ entry: entryJson(entry), rateFound: hourlyRate > 0 }, 201);
+  return json({ entry: entryJson(entry, true), rateFound: hourlyRate > 0 }, 201);
 }
 
 export async function patchEntry(request, id) {
-  const user = await requireUser(request);
+  const { user, permissions } = await requireActor(request);
   const entryId = requireUuid(id, "Entry id");
   const existing = await loadEntry(entryId);
   if (!existing) throw httpError(404, "Entry not found");
-  const isAdmin = user.role === "admin";
-  if (!isAdmin && existing.user_id !== user.id) throw httpError(404, "Entry not found");
-  if (!isAdmin && existing.status === "paid") {
+  const teamEdit = allows(permissions, "timesheet.team", "edit");
+  const own = existing.user_id === user.id;
+  if (!own && !teamEdit) throw httpError(404, "Entry not found");
+  if (own && existing.status === "paid" && !teamEdit) {
     throw httpError(403, "Paid entries cannot be edited");
+  }
+  if (own && existing.status !== "paid" && !teamEdit) {
+    assertCan(permissions, "timesheet.own", "edit");
   }
 
   const body = await readJson(request);
@@ -139,11 +154,13 @@ export async function patchEntry(request, id) {
     [workDate, hours, notes, hourlyRate, entryId],
   );
   const updated = await loadEntry(entryId);
-  return json({ entry: entryJson(updated) });
+  const includeMoney = allows(permissions, "timesheet.payroll", "view") || updated.user_id === user.id;
+  return json({ entry: entryJson(updated, includeMoney) });
 }
 
 export async function deleteEntry(request, id) {
-  await requireAdmin(request);
+  const { permissions } = await requireActor(request);
+  assertCan(permissions, "timesheet.team", "edit");
   const entryId = requireUuid(id, "Entry id");
   const { rowCount } = await query(`DELETE FROM time_entries WHERE id = $1`, [entryId]);
   if (!rowCount) throw httpError(404, "Entry not found");

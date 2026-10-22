@@ -216,6 +216,7 @@ async function withClient(fn) {
 async function mappingTests() {
   process.env.DATABASE_URL = DATABASE_URL;
   process.env.ACCESS_AUD = AUD;
+  process.env.PERMISSIONS_ROLE_FALLBACK = "1";
   delete process.env.ACCESS_DEV_BYPASS;
   delete process.env.ACCESS_DEV_EMAIL;
 
@@ -344,6 +345,7 @@ async function mappingTests() {
     globalThis.fetch = originalFetch;
     delete process.env.ACCESS_DEV_BYPASS;
     delete process.env.ACCESS_DEV_EMAIL;
+    delete process.env.PERMISSIONS_ROLE_FALLBACK;
     resetAccessKeyCache();
     await closePool();
   }

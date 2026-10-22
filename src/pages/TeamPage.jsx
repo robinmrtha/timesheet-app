@@ -5,7 +5,7 @@ import { initials, personName } from "../lib/format.js";
 
 const EMPTY_FORM = { name: "", email: "", role: "employee" };
 
-export function TeamPage({ currentUserId }) {
+export function TeamPage({ currentUserId, canEdit = false }) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -68,6 +68,7 @@ export function TeamPage({ currentUserId }) {
       <Alert kind="success">{message}</Alert>
       <Alert>{error}</Alert>
 
+      {canEdit ? (
       <section className="card">
         <h2>New employee</h2>
         <form className="stack" onSubmit={createUser}>
@@ -102,6 +103,9 @@ export function TeamPage({ currentUserId }) {
           </button>
         </form>
       </section>
+      ) : (
+        <p className="quiet">You can review the team. Adding or changing people needs edit access.</p>
+      )}
 
       <section className="stack">
         {loading ? <LoadingBlock label="Loading team…" /> : null}
@@ -110,6 +114,7 @@ export function TeamPage({ currentUserId }) {
             key={person.id}
             person={person}
             isSelf={person.id === currentUserId}
+            canEdit={canEdit}
             onChanged={async (text) => {
               setMessage(text);
               await load();
@@ -122,7 +127,7 @@ export function TeamPage({ currentUserId }) {
   );
 }
 
-function PersonCard({ person, isSelf, onChanged, onError }) {
+function PersonCard({ person, isSelf, canEdit, onChanged, onError }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(person.name || "");
   const [email, setEmail] = useState(person.email);
@@ -180,6 +185,7 @@ function PersonCard({ person, isSelf, onChanged, onError }) {
           <ActiveBadge active={person.active} />
         </div>
       </div>
+      {canEdit ? (
       <div className="row-actions">
         <button className="btn btn-quiet btn-small" type="button" onClick={() => setOpen((value) => !value)}>
           {open ? "Close" : "Edit"}
@@ -189,7 +195,8 @@ function PersonCard({ person, isSelf, onChanged, onError }) {
         </button>
         {isSelf ? <span className="quiet">This is you</span> : null}
       </div>
-      {open ? (
+      ) : null}
+      {canEdit && open ? (
         <div className="stack person-edit">
           <form className="split" onSubmit={saveProfile}>
             <Field label="Name">

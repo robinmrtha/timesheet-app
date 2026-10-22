@@ -7,3 +7,6 @@ ACCESS_AUD="local-dev-aud"
 # Local only. Off unless set to exactly 1. Never set this on the deployed Worker.
 # ACCESS_DEV_BYPASS=1
 # ACCESS_DEV_EMAIL=mira@example.com
+# Local only. Off unless exactly 1. Uses users.role instead of the HUB binding.
+# Never set this on the deployed Worker.
+PERMISSIONS_ROLE_FALLBACK=1

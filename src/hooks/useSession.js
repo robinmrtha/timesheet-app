@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { ACCESS_LOGOUT_URL } from "../../shared/access.js";
-import { api, setNotSetupHandler, setUnauthorizedHandler } from "../lib/api.js";
+import { api, setNoAccessHandler, setNotSetupHandler, setUnauthorizedHandler } from "../lib/api.js";
 
 export function useSession() {
   const [user, setUser] = useState(null);
+  const [permissions, setPermissions] = useState(null);
   const [reason, setReason] = useState("");
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(true);
@@ -11,7 +12,8 @@ export function useSession() {
 
   const apply = useCallback((data) => {
     setUser(data.user || null);
-    setEmail(data.email || "");
+    setPermissions(data.permissions || null);
+    setEmail(data.email || data.user?.email || "");
     setReason(data.user ? "" : data.reason || "unauthenticated");
     setError("");
     return data.user;
@@ -29,7 +31,13 @@ export function useSession() {
     });
     setNotSetupHandler(() => {
       setUser(null);
+      setPermissions(null);
       setReason("not_setup");
+    });
+    setNoAccessHandler(() => {
+      setUser(null);
+      setPermissions(null);
+      setReason("no_access");
     });
     let cancelled = false;
     api("/api/auth/session")
@@ -53,5 +61,5 @@ export function useSession() {
     window.location.assign(ACCESS_LOGOUT_URL);
   }, []);
 
-  return { user, reason, email, loading, error, refresh, logout, setUser };
+  return { user, permissions, reason, email, loading, error, refresh, logout, setUser };
 }

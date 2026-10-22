@@ -298,11 +298,13 @@ async function apiTests(base, hashes) {
   check(workerSession.data.user.role === "employee", "mapped user keeps the employee role");
   check(!JSON.stringify(workerSession.data).includes("password"), "session response has no password hash");
 
-  const workerEntries = await request(base, `/api/entries?userId=${OTHER_ID}`, { email: "worker@example.com" });
+  const workerEntries = await request(base, "/api/entries", { email: "worker@example.com" });
   check(workerEntries.status === 200, "employee can list entries");
   const workerIds = workerEntries.data.entries.map((entry) => entry.userId);
   check(workerIds.every((id) => id === WORKER_ID), "employee cannot see other people's entries");
   check(!workerIds.includes(OTHER_ID) && !workerIds.includes(FORMER_ID), "foreign entries are absent");
+  const foreignEntries = await request(base, `/api/entries?userId=${OTHER_ID}`, { email: "worker@example.com" });
+  check(foreignEntries.status === 403, "employee cannot request someone else's entries");
 
   const forbiddenUsers = await request(base, "/api/users", { email: "worker@example.com" });
   check(forbiddenUsers.status === 403, "employee cannot list the team");
@@ -495,6 +497,7 @@ async function main() {
 
   process.env.DATABASE_URL = TARGET;
   process.env.ACCESS_DEV_BYPASS = "1";
+  process.env.PERMISSIONS_ROLE_FALLBACK = "1";
   delete process.env.ACCESS_DEV_EMAIL;
   delete process.env.ACCESS_AUD;
   const { startServer } = await import("../server/local-server.js");

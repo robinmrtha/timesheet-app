@@ -1,4 +1,5 @@
 import { NOT_SETUP_MESSAGE } from "../../shared/access.js";
+import { NO_ACCESS_MESSAGE } from "../../shared/permissions.js";
 
 export class ApiError extends Error {
   constructor(message, status) {
@@ -10,6 +11,7 @@ export class ApiError extends Error {
 
 let onUnauthorized = () => {};
 let onNotSetup = () => {};
+let onNoAccess = () => {};
 
 export function setUnauthorizedHandler(handler) {
   onUnauthorized = handler;
@@ -19,10 +21,19 @@ export function setNotSetupHandler(handler) {
   onNotSetup = handler;
 }
 
+export function setNoAccessHandler(handler) {
+  onNoAccess = handler;
+}
+
+function withBase(path) {
+  const base = String(import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+  return `${base}${path}`;
+}
+
 export async function api(path, { method = "GET", body } = {}) {
   let response;
   try {
-    response = await fetch(path, {
+    response = await fetch(withBase(path), {
       method,
       credentials: "same-origin",
       headers: body === undefined ? undefined : { "content-type": "application/json" },
@@ -48,6 +59,10 @@ export async function api(path, { method = "GET", body } = {}) {
   }
   if (response.status === 403 && data?.error === NOT_SETUP_MESSAGE) {
     onNotSetup();
+    throw new ApiError(data.error, 403);
+  }
+  if (response.status === 403 && data?.error === NO_ACCESS_MESSAGE) {
+    onNoAccess();
     throw new ApiError(data.error, 403);
   }
   if (!response.ok) {

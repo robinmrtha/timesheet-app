@@ -4,7 +4,17 @@ export function apiDevPlugin() {
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
         const url = req.url || "";
-        if (!url.startsWith("/api")) return next();
+        if ((url === "/" || url.startsWith("/?")) && req.method === "GET") {
+          res.statusCode = 302;
+          res.setHeader("location", "/timesheet/");
+          res.end();
+          return;
+        }
+        if (url === "/timesheet/api" || url.startsWith("/timesheet/api/") || url.startsWith("/timesheet/api?")) {
+          req.url = url.slice("/timesheet".length);
+        } else if (!url.startsWith("/api")) {
+          return next();
+        }
         try {
           const { handle } = await import("./router.js");
           const { fromNodeRequest, writeNodeResponse } = await import("./node-adapter.js");

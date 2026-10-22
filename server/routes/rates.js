@@ -1,5 +1,5 @@
-import { requireAdmin, requireUser } from "../auth.js";
 import { query } from "../db.js";
+import { allows, assertCan, requireActor } from "../permissions.js";
 import { httpError, json, parseDate, parseRate, readJson, requireUuid } from "../http.js";
 import { rateFor } from "./entries.js";
 
@@ -15,19 +15,22 @@ function rateJson(row) {
 }
 
 export async function applicableRate(request, url) {
-  const user = await requireUser(request);
+  const { user, permissions } = await requireActor(request);
+  assertCan(permissions, "timesheet.own", "view");
   const workDate = parseDate(url.searchParams.get("date"), "Date");
   const hourlyRate = await rateFor(user.id, workDate);
   return json({ hourlyRate, rateFound: hourlyRate > 0, workDate });
 }
 
 export async function listRates(request, url) {
-  const user = await requireUser(request);
+  const { user, permissions } = await requireActor(request);
+  const payroll = allows(permissions, "timesheet.payroll", "view");
+  const own = allows(permissions, "timesheet.own", "view");
+  if (!payroll && !own) throw httpError(403, "You do not have access to that");
   let userId = user.id;
   const requested = url.searchParams.get("userId");
-  if (user.role === "admin") {
-    if (!requested) throw httpError(400, "Choose an employee");
-    userId = requireUuid(requested, "User id");
+  if (payroll) {
+    if (requested) userId = requireUuid(requested, "User id");
   } else if (requested && requested !== user.id) {
     throw httpError(403, "You can only view your own rates");
   }
@@ -43,7 +46,8 @@ export async function listRates(request, url) {
 }
 
 export async function createRate(request) {
-  const admin = await requireAdmin(request);
+  const { user: admin, permissions } = await requireActor(request);
+  assertCan(permissions, "timesheet.payroll", "edit");
   const body = await readJson(request);
   const userId = requireUuid(body.userId, "User id");
   const hourlyRate = parseRate(body.hourlyRate);
@@ -60,7 +64,8 @@ export async function createRate(request) {
 }
 
 export async function patchRate(request, id) {
-  await requireAdmin(request);
+  const { permissions } = await requireActor(request);
+  assertCan(permissions, "timesheet.payroll", "edit");
   const rateId = requireUuid(id, "Rate id");
   const body = await readJson(request);
   const existing = await query(
@@ -84,7 +89,8 @@ export async function patchRate(request, id) {
 }
 
 export async function deleteRate(request, id) {
-  await requireAdmin(request);
+  const { permissions } = await requireActor(request);
+  assertCan(permissions, "timesheet.payroll", "edit");
   const rateId = requireUuid(id, "Rate id");
   const { rowCount } = await query(`DELETE FROM employee_rates WHERE id = $1`, [rateId]);
   if (!rowCount) throw httpError(404, "Rate not found");

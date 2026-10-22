@@ -1,4 +1,5 @@
-import { publicUser, requireAdmin } from "../auth.js";
+import { publicUser } from "../auth.js";
+import { assertAny, assertCan, requireActor } from "../permissions.js";
 import { query } from "../db.js";
 import {
   httpError,
@@ -26,7 +27,11 @@ async function activeAdminCount(exceptId) {
 }
 
 export async function listUsers(request) {
-  await requireAdmin(request);
+  const { permissions } = await requireActor(request);
+  assertAny(permissions, [
+    ["timesheet.admin", "view"],
+    ["timesheet.payroll", "view"],
+  ]);
   const { rows } = await query(
     `SELECT ${USER_COLUMNS}
      FROM users
@@ -36,7 +41,8 @@ export async function listUsers(request) {
 }
 
 export async function createUser(request) {
-  await requireAdmin(request);
+  const { permissions } = await requireActor(request);
+  assertCan(permissions, "timesheet.admin", "edit");
   const body = await readJson(request);
   const email = parseEmail(body.email);
   const name = parseName(body.name);
@@ -56,7 +62,8 @@ export async function createUser(request) {
 }
 
 export async function patchUser(request, id) {
-  const admin = await requireAdmin(request);
+  const { user: admin, permissions } = await requireActor(request);
+  assertCan(permissions, "timesheet.admin", "edit");
   const userId = requireUuid(id, "User id");
   const body = await readJson(request);
   const { rows } = await query(`SELECT ${USER_COLUMNS} FROM users WHERE id = $1`, [userId]);

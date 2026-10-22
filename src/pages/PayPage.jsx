@@ -5,7 +5,7 @@ import { api, withQuery } from "../lib/api.js";
 import { hoursText, money, optionLabel, personName, rangeLabel } from "../lib/format.js";
 import { summarize } from "../lib/totals.js";
 
-export function PayPage({ filters }) {
+export function PayPage({ filters, canEdit = false }) {
   const [users, setUsers] = useState([]);
   const [usersError, setUsersError] = useState("");
   const [userId, setUserId] = useState("");
@@ -111,14 +111,18 @@ export function PayPage({ filters }) {
                   ))}
                 </select>
               </Field>
-              <Field label="Payment reference" hint="Optional. Check number, Zelle, Venmo.">
-                <input
-                  value={reference}
-                  maxLength={200}
-                  placeholder="Zelle, check #, Venmo"
-                  onChange={(event) => setReference(event.target.value)}
-                />
-              </Field>
+              {canEdit ? (
+                <Field label="Payment reference" hint="Optional. Check number, Zelle, Venmo.">
+                  <input
+                    value={reference}
+                    maxLength={200}
+                    placeholder="Zelle, check #, Venmo"
+                    onChange={(event) => setReference(event.target.value)}
+                  />
+                </Field>
+              ) : (
+                <p className="quiet">You can review unpaid hours. Marking them paid needs edit access.</p>
+              )}
             </div>
             <DateFilters filters={filters} />
             <div className="pay-preview">
@@ -130,14 +134,16 @@ export function PayPage({ filters }) {
                   {rangeLabel(filters)} · {totals.unpaidCount} {totals.unpaidCount === 1 ? "entry" : "entries"}
                 </p>
               </div>
-              <button
-                className="btn btn-primary"
-                type="button"
-                disabled={busy || loading || !userId || totals.unpaidCount === 0}
-                onClick={() => setConfirming(true)}
-              >
-                Mark unpaid as paid
-              </button>
+              {canEdit ? (
+                <button
+                  className="btn btn-primary"
+                  type="button"
+                  disabled={busy || loading || !userId || totals.unpaidCount === 0}
+                  onClick={() => setConfirming(true)}
+                >
+                  Mark unpaid as paid
+                </button>
+              ) : null}
             </div>
             <Alert kind="success">{message}</Alert>
             <Alert>{error}</Alert>
